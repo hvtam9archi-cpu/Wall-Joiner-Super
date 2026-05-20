@@ -1,13 +1,13 @@
-﻿using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.DatabaseServices;
 
 namespace ProWallTools
 {
     public static class WallConstants
     {
         // Dung sai hình học
-        public const double GapTolerance = 10.0;
-        public const double VertexTolerance = 1e-4;
-        public const double DefaultOffset = 15.0;
+        public static double GapTolerance = 10.0;
+        public static double VertexTolerance = 1e-4;
+        public static double DefaultOffset = 15.0;
 
         // Cấu hình Layer mặc định
         public static string CurrentWallLayer = "ABC_A_Nettuong";

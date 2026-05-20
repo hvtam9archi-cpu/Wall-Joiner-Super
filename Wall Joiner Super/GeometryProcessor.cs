@@ -40,7 +40,7 @@ namespace ProWallTools
             );
 
             double minDistance = searchRadius + 1e-4;
-            Vector3d bestShift = Vector3d.Zero;
+            Vector3d bestShift = new Vector3d();
 
             foreach (ObjectId id in btr)
             {
