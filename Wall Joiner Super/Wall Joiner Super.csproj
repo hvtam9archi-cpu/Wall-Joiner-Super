@@ -52,7 +52,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Resources\*.png" />
+    <!-- Ảnh nhúng vào Assembly dưới dạng WPF Resource (Pack URI: pack://application:,,,/WallJoinerSuper;component/Resources/xxx.png) -->
+    <Resource Include="Resources\settings.png" />
+    <Resource Include="Resources\join.png" />
+    <Resource Include="Resources\finish.png" />
   </ItemGroup>
 
   <!-- Automation Build Target to copy build bundle to Autodesk Plugins folder -->

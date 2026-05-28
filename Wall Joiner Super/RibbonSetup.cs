@@ -132,7 +132,7 @@ namespace ProWallTools
                     Size = RibbonItemSize.Large,
                     Orientation = System.Windows.Controls.Orientation.Vertical,
                     CommandHandler = new RibbonCommandHandler("WJ_UI"),
-                    LargeImage = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/settings.png")
+                    LargeImage = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/settings.png", 32)
                 };
 
                 // Nút 2: Thực thi nhanh WJ
@@ -144,7 +144,7 @@ namespace ProWallTools
                     Size = RibbonItemSize.Standard,
                     Orientation = System.Windows.Controls.Orientation.Horizontal,
                     CommandHandler = new RibbonCommandHandler("WJ"),
-                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/join.png")
+                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/join.png", 16)
                 };
 
                 // Nút 3: Thực thi nhanh FW
@@ -156,7 +156,7 @@ namespace ProWallTools
                     Size = RibbonItemSize.Standard,
                     Orientation = System.Windows.Controls.Orientation.Horizontal,
                     CommandHandler = new RibbonCommandHandler("FW"),
-                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/finish.png")
+                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/finish.png", 16)
                 };
 
                 // Nút 4: Thực thi nhanh BW
@@ -168,7 +168,7 @@ namespace ProWallTools
                     Size = RibbonItemSize.Standard,
                     Orientation = System.Windows.Controls.Orientation.Horizontal,
                     CommandHandler = new RibbonCommandHandler("BW"),
-                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/join.png")
+                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/join.png", 16)
                 };
 
                 panelSource.Items.Add(btnUI);
@@ -189,14 +189,27 @@ namespace ProWallTools
             }
         }
 
-        private static System.Windows.Media.ImageSource GetImage(string uriString)
+        /// <summary>
+        /// Load ảnh PNG từ Embedded Resource qua Pack URI.
+        /// DecodePixelWidth/Height giúp scale ảnh về đúng kích thước Ribbon yêu cầu.
+        /// </summary>
+        private static System.Windows.Media.ImageSource GetImage(string uriString, int size = 16)
         {
             try
             {
-                return new System.Windows.Media.Imaging.BitmapImage(new Uri(uriString));
+                var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri(uriString);
+                bmp.DecodePixelWidth = size;
+                bmp.DecodePixelHeight = size;
+                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
             }
-            catch
+            catch (System.Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine("Lỗi load icon Ribbon: " + ex.Message);
                 return null;
             }
         }
