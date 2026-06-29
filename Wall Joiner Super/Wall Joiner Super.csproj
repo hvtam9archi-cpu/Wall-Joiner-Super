@@ -53,9 +53,10 @@
 
   <ItemGroup>
     <!-- Ảnh nhúng vào Assembly dưới dạng WPF Resource (Pack URI: pack://application:,,,/WallJoinerSuper;component/Resources/xxx.png) -->
-    <Resource Include="Resources\settings.png" />
-    <Resource Include="Resources\join.png" />
-    <Resource Include="Resources\finish.png" />
+    <Resource Include="Resources\IconRibbon_Settings_32px.png" />
+    <Resource Include="Resources\IconRibbon_Wall-Joiner_32px.png" />
+    <Resource Include="Resources\IconRibbon_Wall-Finisher_32px.png" />
+    <Resource Include="Resources\IconRibbon_Beautify_32px.png" />
   </ItemGroup>
 
   <!-- Automation Build Target to copy build bundle to Autodesk Plugins folder -->
@@ -74,5 +75,11 @@
     <!-- Copy compiled binaries to Contents folder -->
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(ContentsDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).pdb" DestinationFolder="$(ContentsDir)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)$(AssemblyName).pdb')" />
+    
+    <!-- Copy ribbon icons (.ico) to Resource folder inside bundle -->
+    <ItemGroup>
+      <IconFiles Include="$(ProjectDir)Resources\*.ico" />
+    </ItemGroup>
+    <Copy SourceFiles="@(IconFiles)" DestinationFolder="$(ContentsDir)\Resource" SkipUnchangedFiles="true" />
   </Target>
 </Project>
