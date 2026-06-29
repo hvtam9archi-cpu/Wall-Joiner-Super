@@ -26,6 +26,9 @@ namespace ProWallTools
 
             // Load danh sách Layer hiện có trong bản vẽ
             LoadLayers();
+
+            // Load icon tương tự Ribbon
+            LoadWindowIcon("IconRibbon_Settings_32px.ico");
         }
 
         private void LoadLayers()
@@ -120,6 +123,24 @@ namespace ProWallTools
             {
                 this.Close();
             }
+        }
+
+        private void LoadWindowIcon(string iconFileName)
+        {
+            try
+            {
+                string assemblyDir = System.IO.Path.GetDirectoryName(
+                    System.Reflection.Assembly.GetExecutingAssembly().Location);
+                string iconPath = System.IO.Path.Combine(assemblyDir, "Resource", iconFileName);
+                if (System.IO.File.Exists(iconPath))
+                {
+                    var uri = new System.Uri(iconPath, System.UriKind.Absolute);
+                    imgIcon.Source = System.Windows.Media.Imaging.BitmapFrame.Create(
+                        uri, System.Windows.Media.Imaging.BitmapCreateOptions.None,
+                        System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+                }
+            }
+            catch { }
         }
     }
 }

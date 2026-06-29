@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Reflection;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.Windows;
@@ -126,62 +128,59 @@ namespace ProWallTools
                 // Nút 1: Mở giao diện Cài đặt (WJ_UI)
                 RibbonButton btnUI = new RibbonButton
                 {
-                    Text = "Wall Joiner\nSettings",
+                    Text = "Settings",
                     ShowText = true,
                     ShowImage = true,
                     Size = RibbonItemSize.Large,
                     Orientation = System.Windows.Controls.Orientation.Vertical,
                     CommandHandler = new RibbonCommandHandler("WJ_UI"),
-                    LargeImage = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/settings.png", 32)
+                    LargeImage = LoadRibbonIcon("IconRibbon_Settings_32px.ico"),
+                    Image = LoadRibbonIcon("IconRibbon_Settings_32px.ico")
                 };
 
                 // Nút 2: Thực thi nhanh WJ
                 RibbonButton btnWJ = new RibbonButton
                 {
-                    Text = "Join Walls (WJ)",
+                    Text = "Join Walls\n(WJ)",
                     ShowText = true,
                     ShowImage = true,
-                    Size = RibbonItemSize.Standard,
-                    Orientation = System.Windows.Controls.Orientation.Horizontal,
+                    Size = RibbonItemSize.Large,
+                    Orientation = System.Windows.Controls.Orientation.Vertical,
                     CommandHandler = new RibbonCommandHandler("WJ"),
-                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/join.png", 16)
+                    LargeImage = LoadRibbonIcon("IconRibbon_Wall-Joiner_32px.ico"),
+                    Image = LoadRibbonIcon("IconRibbon_Wall-Joiner_32px.ico")
                 };
 
                 // Nút 3: Thực thi nhanh FW
                 RibbonButton btnFW = new RibbonButton
                 {
-                    Text = "Finish Wall (FW)",
+                    Text = "Wall Finisher\n(FW)",
                     ShowText = true,
                     ShowImage = true,
-                    Size = RibbonItemSize.Standard,
-                    Orientation = System.Windows.Controls.Orientation.Horizontal,
+                    Size = RibbonItemSize.Large,
+                    Orientation = System.Windows.Controls.Orientation.Vertical,
                     CommandHandler = new RibbonCommandHandler("FW"),
-                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/finish.png", 16)
+                    LargeImage = LoadRibbonIcon("IconRibbon_Wall-Finisher_32px.ico"),
+                    Image = LoadRibbonIcon("IconRibbon_Wall-Finisher_32px.ico")
                 };
 
                 // Nút 4: Thực thi nhanh BW
                 RibbonButton btnBW = new RibbonButton
                 {
-                    Text = "Beautify Walls (BW)",
+                    Text = "Beautify\n(BW)",
                     ShowText = true,
                     ShowImage = true,
-                    Size = RibbonItemSize.Standard,
-                    Orientation = System.Windows.Controls.Orientation.Horizontal,
+                    Size = RibbonItemSize.Large,
+                    Orientation = System.Windows.Controls.Orientation.Vertical,
                     CommandHandler = new RibbonCommandHandler("BW"),
-                    Image = GetImage("pack://application:,,,/WallJoinerSuper;component/Resources/join.png", 16)
+                    LargeImage = LoadRibbonIcon("IconRibbon_Beautify_32px.ico"),
+                    Image = LoadRibbonIcon("IconRibbon_Beautify_32px.ico")
                 };
 
+                panelSource.Items.Add(btnWJ);
+                panelSource.Items.Add(btnFW);
+                panelSource.Items.Add(btnBW);
                 panelSource.Items.Add(btnUI);
-                panelSource.Items.Add(new RibbonSeparator());
-
-                // Stack panel để xếp 3 nút nhỏ nằm cạnh nhau theo chiều dọc
-                RibbonRowPanel rowPanel = new RibbonRowPanel();
-                rowPanel.Items.Add(btnWJ);
-                rowPanel.Items.Add(new RibbonRowBreak());
-                rowPanel.Items.Add(btnFW);
-                rowPanel.Items.Add(new RibbonRowBreak());
-                rowPanel.Items.Add(btnBW);
-                panelSource.Items.Add(rowPanel);
             }
             catch (System.Exception ex)
             {
@@ -190,28 +189,30 @@ namespace ProWallTools
         }
 
         /// <summary>
-        /// Load ảnh PNG từ Embedded Resource qua Pack URI.
-        /// DecodePixelWidth/Height giúp scale ảnh về đúng kích thước Ribbon yêu cầu.
+        /// Load icon từ file .ico trong thư mục Resource (cạnh DLL) bằng BitmapFrame.Create.
+        /// Giúp AutoCAD tự động chọn kích thước thích hợp (16x16 hoặc 32x32) mà không bị crop/mờ.
         /// </summary>
-        private static System.Windows.Media.ImageSource GetImage(string uriString, int size = 16)
+        private static System.Windows.Media.ImageSource LoadRibbonIcon(string iconFileName)
         {
             try
             {
-                var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                bmp.BeginInit();
-                bmp.UriSource = new Uri(uriString);
-                bmp.DecodePixelWidth = size;
-                bmp.DecodePixelHeight = size;
-                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bmp.EndInit();
-                bmp.Freeze();
-                return bmp;
+                string assemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string iconPath = Path.Combine(assemblyDir, "Resource", iconFileName);
+
+                if (File.Exists(iconPath))
+                {
+                    var uri = new Uri(iconPath, UriKind.Absolute);
+                    var icon = System.Windows.Media.Imaging.BitmapFrame.Create(
+                        uri, System.Windows.Media.Imaging.BitmapCreateOptions.None,
+                        System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+                    return icon;
+                }
             }
             catch (System.Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine("Lỗi load icon Ribbon: " + ex.Message);
-                return null;
             }
+            return null;
         }
     }
 
