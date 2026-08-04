@@ -1,146 +1,146 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
-using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
-using Application = Autodesk.AutoCAD.ApplicationServices.Application;
 
 namespace ProWallTools
 {
     public partial class WallJoinWindow : Window
     {
         public WallJoinWindow()
+            : this(Array.Empty<string>(), new WallSettings())
         {
-            InitializeComponent();
-
-            // Chặn gọi API AutoCAD khi đang hiển thị trong Designer của Visual Studio
-            if (System.ComponentModel.DesignerProperties.GetIsInDesignMode(this))
-            {
-                return;
-            }
-
-            // Khởi tạo các giá trị cấu hình mặc định từ hằng số
-            txtGap.Text = WallConstants.GapTolerance.ToString();
-            txtVertex.Text = WallConstants.VertexTolerance.ToString();
-
-            // Load danh sách Layer hiện có trong bản vẽ
-            LoadLayers();
-
-            // Load icon tương tự Ribbon
-            LoadWindowIcon("IconRibbon_Settings_32px.ico");
         }
 
-        private void LoadLayers()
+        public WallJoinWindow(IReadOnlyList<string> layerNames, WallSettings settings)
         {
-            List<string> layerNames = new List<string>();
-            Document doc = Application.DocumentManager.MdiActiveDocument;
-            if (doc != null)
-            {
-                try
-                {
-                    using (DocumentLock docLock = doc.LockDocument())
-                    {
-                        using (Transaction tr = doc.Database.TransactionManager.StartTransaction())
-                        {
-                            LayerTable lt = tr.GetObject(doc.Database.LayerTableId, OpenMode.ForRead) as LayerTable;
-                            if (lt != null)
-                            {
-                                foreach (ObjectId id in lt)
-                                {
-                                    LayerTableRecord ltr = tr.GetObject(id, OpenMode.ForRead) as LayerTableRecord;
-                                    if (ltr != null)
-                                    {
-                                        layerNames.Add(ltr.Name);
-                                    }
-                                }
-                            }
-                            tr.Commit();
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine("Lỗi nạp Layers: " + ex.Message);
-                }
-            }
+            InitializeComponent();
+            if (System.ComponentModel.DesignerProperties.GetIsInDesignMode(this)) return;
+
+            if (layerNames == null) throw new ArgumentNullException(nameof(layerNames));
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
 
             cmbWallLayer.ItemsSource = layerNames;
             cmbFinishLayer.ItemsSource = layerNames;
+            cmbOffsetMode.ItemsSource = Enum.GetValues(typeof(FinishOffsetMode));
+            LoadSettings(settings);
+        }
 
-            // Chọn các layer mặc định
-            cmbWallLayer.Text = WallConstants.CurrentWallLayer;
-            cmbFinishLayer.Text = WallConstants.CurrentFinishLayer;
+        public WallSettings SavedSettings { get; private set; }
+
+        private void LoadSettings(WallSettings settings)
+        {
+            CultureInfo culture = CultureInfo.CurrentCulture;
+            txtGap.Text = settings.GapTolerance.ToString("0.####", culture);
+            txtVertex.Text = settings.VertexTolerance.ToString("0.########", culture);
+            txtFinishOffset.Text = settings.FinishOffset.ToString("0.####", culture);
+            txtSnapRadius.Text = settings.SnapRadius.ToString("0.####", culture);
+            txtSnapStep.Text = settings.SnapStep.ToString("0.####", culture);
+            cmbWallLayer.Text = settings.WallLayer;
+            cmbFinishLayer.Text = settings.FinishLayer;
+            cmbOffsetMode.SelectedItem = settings.FinishOffsetMode;
+            chkKeepOriginals.IsChecked = settings.KeepOriginals;
+            chkStrictMode.IsChecked = settings.StrictMode;
         }
 
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            if (e.ChangedButton == MouseButton.Left)
-            {
-                this.DragMove();
-            }
+            if (e.ChangedButton == MouseButton.Left) DragMove();
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
-            if (e.Key == Key.Escape)
-            {
-                this.Close();
-            }
+            if (e.Key == Key.Escape) Close();
         }
 
         private void Close_Click(object sender, RoutedEventArgs e)
         {
-            this.Close();
+            Close();
         }
 
-        private bool SaveSettings()
+        private bool TryBuildSettings(out WallSettings settings)
         {
-            if (!double.TryParse(txtGap.Text, out double gap) || gap < 0)
+            settings = null;
+            if (!TryParseNumber(txtGap.Text, out double gap) ||
+                !TryParseNumber(txtVertex.Text, out double vertex) ||
+                !TryParseNumber(txtFinishOffset.Text, out double finishOffset) ||
+                !TryParseNumber(txtSnapRadius.Text, out double snapRadius) ||
+                !TryParseNumber(txtSnapStep.Text, out double snapStep))
             {
-                MessageBox.Show(this, "Gap Tolerance không hợp lệ. Vui lòng nhập số dương.", "Lỗi nhập liệu", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShowValidationError("Các trường dung sai, offset và bước lưới phải là số hợp lệ.");
                 return false;
             }
 
-            if (!double.TryParse(txtVertex.Text, out double vertex) || vertex < 0)
+            var candidate = new WallSettings
             {
-                MessageBox.Show(this, "Vertex Tolerance không hợp lệ. Vui lòng nhập số dương.", "Lỗi nhập liệu", MessageBoxButton.OK, MessageBoxImage.Error);
+                GapTolerance = gap,
+                VertexTolerance = vertex,
+                FinishOffset = finishOffset,
+                SnapRadius = snapRadius,
+                SnapStep = snapStep,
+                WallLayer = (cmbWallLayer.Text ?? string.Empty).Trim(),
+                FinishLayer = (cmbFinishLayer.Text ?? string.Empty).Trim(),
+                FinishOffsetMode = cmbOffsetMode.SelectedItem is FinishOffsetMode mode
+                    ? mode
+                    : FinishOffsetMode.Outside,
+                KeepOriginals = chkKeepOriginals.IsChecked == true,
+                StrictMode = chkStrictMode.IsChecked == true
+            };
+
+            IReadOnlyList<string> errors = candidate.Validate();
+            if (errors.Count > 0)
+            {
+                ShowValidationError(string.Join(Environment.NewLine, errors));
                 return false;
             }
 
-            WallConstants.GapTolerance = gap;
-            WallConstants.VertexTolerance = vertex;
-            WallConstants.CurrentWallLayer = cmbWallLayer.Text;
-            WallConstants.CurrentFinishLayer = cmbFinishLayer.Text;
+            try
+            {
+                SymbolUtilityServices.ValidateSymbolName(candidate.WallLayer, false);
+                SymbolUtilityServices.ValidateSymbolName(candidate.FinishLayer, false);
+            }
+            catch (Exception ex)
+            {
+                ShowValidationError("Tên layer không hợp lệ: " + ex.Message);
+                return false;
+            }
 
+            settings = candidate;
             return true;
         }
 
         private void Save_Click(object sender, RoutedEventArgs e)
         {
-            if (SaveSettings())
-            {
-                this.Close();
-            }
+            if (!TryBuildSettings(out WallSettings settings)) return;
+
+            SavedSettings = settings;
+            DialogResult = true;
+            Close();
         }
 
-        private void LoadWindowIcon(string iconFileName)
+        private void Reset_Click(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                string assemblyDir = System.IO.Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location);
-                string iconPath = System.IO.Path.Combine(assemblyDir, "Resource", iconFileName);
-                if (System.IO.File.Exists(iconPath))
-                {
-                    var uri = new System.Uri(iconPath, System.UriKind.Absolute);
-                    imgIcon.Source = System.Windows.Media.Imaging.BitmapFrame.Create(
-                        uri, System.Windows.Media.Imaging.BitmapCreateOptions.None,
-                        System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
-                }
-            }
-            catch { }
+            LoadSettings(new WallSettings());
+        }
+
+        private static bool TryParseNumber(string text, out double value)
+        {
+            const NumberStyles styles = NumberStyles.Float | NumberStyles.AllowThousands;
+            return double.TryParse(text, styles, CultureInfo.CurrentCulture, out value) ||
+                   double.TryParse(text, styles, CultureInfo.InvariantCulture, out value);
+        }
+
+        private void ShowValidationError(string message)
+        {
+            MessageBox.Show(
+                this,
+                message,
+                "Cấu hình không hợp lệ",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 }

@@ -8,407 +8,1045 @@ namespace ProWallTools
 {
     public static class GeometryProcessor
     {
-        public static Action<string> Logger { get; set; }
-
-        private static void LogMessage(string msg)
+        private sealed class CurveBounds
         {
-            Logger?.Invoke(msg);
+            public int Index;
+            public Extents3d Extents;
         }
 
-        public static void DisposeCollection(DBObjectCollection coll)
+        private sealed class BridgeCandidate
         {
-            if (coll != null)
+            public Point3d From;
+            public Point3d To;
+            public double Distance;
+        }
+
+        private sealed class UnionFind
+        {
+            private readonly int[] _parents;
+            private readonly byte[] _ranks;
+
+            public UnionFind(int size)
             {
-                foreach (DBObject obj in coll)
-                {
-                    if (obj != null && !obj.IsDisposed)
-                        obj.Dispose();
-                }
-                coll.Dispose();
+                _parents = new int[size];
+                _ranks = new byte[size];
+                for (int i = 0; i < size; i++) _parents[i] = i;
             }
-        }
 
-        // =======================================================================
-        // 1. TỪ TÍNH BẮT ĐIỂM CHO TOÀN BỘ BOUNDING BOX TỔNG
-        // =======================================================================
-        public static Vector3d GetClusterSnapVector(Extents3d clusterExt, BlockTableRecord btr, Transaction tr, HashSet<ObjectId> ignoreIds)
-        {
-            double searchRadius = 10.0;
-            Extents3d searchBox = new Extents3d(
-                new Point3d(clusterExt.MinPoint.X - searchRadius, clusterExt.MinPoint.Y - searchRadius, 0),
-                new Point3d(clusterExt.MaxPoint.X + searchRadius, clusterExt.MaxPoint.Y + searchRadius, 0)
-            );
-
-            double minDistance = searchRadius + 1e-4;
-            Vector3d bestShift = new Vector3d();
-
-            foreach (ObjectId id in btr)
+            public int Find(int value)
             {
-                if (!id.IsValid || id.IsErased) continue;
-                if (ignoreIds != null && ignoreIds.Contains(id)) continue;
-
-                Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                if (ent == null || !(ent is Curve cv)) continue;
-
-                try
+                while (_parents[value] != value)
                 {
-                    if (!IsIntersect(searchBox, cv.GeometricExtents)) continue;
-
-                    List<Point3d> externalVerts = GetVertices(cv);
-
-                    Point3d[] bboxCorners = {
-                        new Point3d(clusterExt.MinPoint.X, clusterExt.MaxPoint.Y, 0), 
-                        new Point3d(clusterExt.MaxPoint.X, clusterExt.MaxPoint.Y, 0), 
-                        new Point3d(clusterExt.MinPoint.X, clusterExt.MinPoint.Y, 0), 
-                        new Point3d(clusterExt.MaxPoint.X, clusterExt.MinPoint.Y, 0)  
-                    };
-
-                    foreach (Point3d corner in bboxCorners)
-                    {
-                        foreach (Point3d extPt in externalVerts)
-                        {
-                            double dist = new Point2d(corner.X, corner.Y).GetDistanceTo(new Point2d(extPt.X, extPt.Y));
-                            if (dist > 1e-4 && dist <= minDistance)
-                            {
-                                minDistance = dist;
-                                bestShift = new Vector3d(extPt.X - corner.X, extPt.Y - corner.Y, 0);
-                            }
-                        }
-                    }
+                    _parents[value] = _parents[_parents[value]];
+                    value = _parents[value];
                 }
-                catch (System.Exception ex)
-                {
-                    LogMessage($"Lỗi quét từ tính đối tượng {id.Handle}: {ex.Message}");
-                }
+                return value;
             }
-            return bestShift;
-        }
 
-        // =======================================================================
-        // 2. LÀM TRÒN LƯỚI TOÀN CỤC (TRIỆT TIÊU THẬP PHÂN TUYỆT ĐỐI)
-        // =======================================================================
-        public static double CustomRound(double val)
-        {
-            int sign = Math.Sign(val);
-            val = Math.Abs(val);
-            double tens = Math.Floor(val / 10.0) * 10.0;
-            double units = val - tens;
-
-            double rounded;
-            if (units < 5.0 - 1e-4) rounded = tens + 0.0;
-            else if (units <= 5.0 + 1e-4) rounded = tens + 5.0;
-            else rounded = tens + 10.0;
-
-            return sign < 0 ? -rounded : rounded;
-        }
-
-        public static Polyline BeautifyPolyline(Polyline pl, Point2d origAnchor, Point2d finalRoundedAnchor)
-        {
-            if (pl.NumberOfVertices < 2) return pl;
-
-            Polyline cleanPl = new Polyline();
-            cleanPl.Elevation = 0;
-            cleanPl.Normal = Vector3d.ZAxis;
-
-            int validIdx = 0;
-            for (int i = 0; i < pl.NumberOfVertices; i++)
+            public void Union(int first, int second)
             {
-                Point2d pt = pl.GetPoint2dAt(i);
-                double dx = pt.X - origAnchor.X;
-                double dy = pt.Y - origAnchor.Y;
+                int firstRoot = Find(first);
+                int secondRoot = Find(second);
+                if (firstRoot == secondRoot) return;
 
-                Point2d snappedPt = new Point2d(
-                    finalRoundedAnchor.X + CustomRound(dx),
-                    finalRoundedAnchor.Y + CustomRound(dy)
-                );
-
-                if (validIdx > 0)
+                if (_ranks[firstRoot] < _ranks[secondRoot])
                 {
-                    if (snappedPt.GetDistanceTo(cleanPl.GetPoint2dAt(validIdx - 1)) > 1e-4)
-                        cleanPl.AddVertexAt(validIdx++, snappedPt, 0, 0, 0);
+                    _parents[firstRoot] = secondRoot;
+                }
+                else if (_ranks[firstRoot] > _ranks[secondRoot])
+                {
+                    _parents[secondRoot] = firstRoot;
                 }
                 else
                 {
-                    cleanPl.AddVertexAt(validIdx++, snappedPt, 0, 0, 0);
+                    _parents[secondRoot] = firstRoot;
+                    _ranks[firstRoot]++;
+                }
+            }
+        }
+
+        public static void DisposeCollection(DBObjectCollection collection, bool disposeItems)
+        {
+            if (collection == null) return;
+
+            if (disposeItems)
+            {
+                foreach (DBObject item in collection)
+                {
+                    if (item != null && !item.IsDisposed)
+                    {
+                        item.Dispose();
+                    }
                 }
             }
 
-            if (cleanPl.NumberOfVertices > 1 && cleanPl.GetPoint2dAt(0).GetDistanceTo(cleanPl.GetPoint2dAt(cleanPl.NumberOfVertices - 1)) < 1e-4)
-            {
-                cleanPl.RemoveVertexAt(cleanPl.NumberOfVertices - 1);
-            }
-            return cleanPl;
+            collection.Dispose();
         }
 
-        // =======================================================================
-        // CÁC HÀM TIỆN ÍCH BỔ TRỢ ĐÃ FIX DISPOSE MEMORY LEAK VÀ XÓA CATCH TRỐNG
-        // =======================================================================
-        private static List<Point3d> GetVertices(Curve cv)
+        public static CurveCollectionResult CollectCurves(
+            Transaction transaction,
+            IEnumerable<ObjectId> sourceIds,
+            Action<string> logger = null)
         {
-            List<Point3d> pts = new List<Point3d>();
-            if (cv is Polyline pl) { for (int i = 0; i < pl.NumberOfVertices; i++) pts.Add(pl.GetPoint3dAt(i)); }
-            else if (cv is Line ln) { pts.Add(ln.StartPoint); pts.Add(ln.EndPoint); }
-            return pts;
-        }
+            if (transaction == null) throw new ArgumentNullException(nameof(transaction));
+            if (sourceIds == null) throw new ArgumentNullException(nameof(sourceIds));
 
-        public static List<Polyline> ProcessClusterToBoundaries(List<Curve> cluster)
-        {
-            List<Curve> bridges = CreateBridges(cluster);
-            cluster.AddRange(bridges);
+            var result = new CurveCollectionResult();
 
-            List<Polyline> rawBoundaries = new List<Polyline>();
-            using (DBObjectCollection input = new DBObjectCollection())
+            foreach (ObjectId sourceId in sourceIds.Distinct())
             {
-                foreach (var c in cluster) input.Add(c);
+                var state = new CurveSourceState { SourceId = sourceId };
+                result.Sources.Add(state);
 
                 try
                 {
-                    using (DBObjectCollection regions = Region.CreateFromCurves(input))
+                    var entity = transaction.GetObject(sourceId, OpenMode.ForRead, false) as Entity;
+                    if (entity == null)
                     {
-                        if (regions.Count > 0)
-                        {
-                            Region uni = (Region)regions[0];
-                            for (int i = 1; i < regions.Count; i++)
-                            {
-                                Region sec = (Region)regions[i];
-                                try
-                                {
-                                    uni.BooleanOperation(BooleanOperationType.BoolUnite, sec);
-                                }
-                                catch (System.Exception ex)
-                                {
-                                    LogMessage($"Lỗi BooleanOperation gộp vùng: {ex.Message}");
-                                }
-                                finally
-                                {
-                                    // Đảm bảo Dispose Region hợp phần sau khi Unite
-                                    if (sec != null && !sec.IsDisposed) sec.Dispose();
-                                }
-                            }
+                        state.ExtractionFailed = true;
+                        result.Warnings.Add($"Không đọc được đối tượng {sourceId.Handle}.");
+                        continue;
+                    }
 
-                            using (DBObjectCollection exploded = new DBObjectCollection())
-                            {
-                                uni.Explode(exploded);
-                                rawBoundaries = JoinCurves(exploded.Cast<Curve>().ToList());
-                                // Rất quan trọng: Dispose triệt để object sinh ra từ Explode
-                                DisposeCollection(exploded);
-                            }
-                            if (uni != null && !uni.IsDisposed) uni.Dispose();
-                        }
+                    int countBefore = result.Curves.Count;
+                    ExtractRecursive(entity, result.Curves, state, result.Warnings, logger);
+                    state.CurveCount = result.Curves.Count - countBefore;
+
+                    if (state.CurveCount == 0)
+                    {
+                        state.ExtractionFailed = true;
+                        result.Warnings.Add($"Đối tượng {sourceId.Handle} không tạo được curve hợp lệ.");
                     }
                 }
-                catch (System.Exception ex)
+                catch (Exception ex)
                 {
-                    LogMessage($"Lỗi lúc tạo Region từ Curve: {ex.Message}");
+                    state.ExtractionFailed = true;
+                    result.Warnings.Add($"Lỗi đọc đối tượng {sourceId.Handle}: {ex.Message}");
+                    logger?.Invoke(ex.ToString());
                 }
             }
 
-            // Dọn dẹp curves nối rác
-            foreach (var br in bridges) br.Dispose();
-
-            if (rawBoundaries.Count == 0) rawBoundaries = JoinCurves(cluster);
-            return rawBoundaries;
+            return result;
         }
 
-        private static List<Curve> CreateBridges(List<Curve> curves)
+        private static void ExtractRecursive(
+            Entity entity,
+            ICollection<Curve> curves,
+            CurveSourceState sourceState,
+            ICollection<string> warnings,
+            Action<string> logger)
         {
-            List<Curve> bridges = new List<Curve>();
-            // Tối ưu bằng Extents3d tránh O(N^2) quá nặng
+            if (entity is BlockReference blockReference)
+            {
+                DBObjectCollection exploded = new DBObjectCollection();
+                try
+                {
+                    blockReference.Explode(exploded);
+                    if (exploded.Count == 0)
+                    {
+                        sourceState.ExtractionFailed = true;
+                        warnings.Add($"Block {sourceState.SourceId.Handle} không bung được nội dung.");
+                    }
+
+                    foreach (DBObject item in exploded)
+                    {
+                        if (item is Entity child)
+                        {
+                            ExtractRecursive(child, curves, sourceState, warnings, logger);
+                        }
+                        else
+                        {
+                            sourceState.HasUnsupportedContent = true;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    sourceState.ExtractionFailed = true;
+                    warnings.Add($"Không thể bung block {sourceState.SourceId.Handle}: {ex.Message}");
+                    logger?.Invoke(ex.ToString());
+                }
+                finally
+                {
+                    DisposeCollection(exploded, disposeItems: true);
+                }
+                return;
+            }
+
+            if (entity is Curve curve)
+            {
+                Curve clone = SanitizeCurve(curve, logger);
+                if (clone != null)
+                {
+                    curves.Add(clone);
+                }
+                else
+                {
+                    sourceState.ExtractionFailed = true;
+                }
+                return;
+            }
+
+            sourceState.HasUnsupportedContent = true;
+        }
+
+        private static Curve SanitizeCurve(Curve curve, Action<string> logger)
+        {
+            Curve clone = null;
+            try
+            {
+                if (curve == null || Math.Abs(curve.EndParam - curve.StartParam) < 1e-9)
+                {
+                    return null;
+                }
+
+                if (curve is Polyline sourcePolyline)
+                {
+                    if (!IsPositiveWorldZ(sourcePolyline.Normal))
+                    {
+                        logger?.Invoke("Bỏ qua LWPOLYLINE có normal không cùng hướng WCS Z.");
+                        return null;
+                    }
+
+                    Point3d[] worldVertices = Enumerable
+                        .Range(0, sourcePolyline.NumberOfVertices)
+                        .Select(sourcePolyline.GetPoint3dAt)
+                        .ToArray();
+                    var polyline = sourcePolyline.Clone() as Polyline;
+                    clone = polyline;
+                    polyline.Normal = Vector3d.ZAxis;
+                    polyline.Elevation = 0;
+                    for (int i = 0; i < worldVertices.Length; i++)
+                    {
+                        polyline.SetPointAt(i, ToPoint2d(worldVertices[i]));
+                    }
+                }
+                else if (curve is Line sourceLine)
+                {
+                    var line = sourceLine.Clone() as Line;
+                    clone = line;
+                    line.StartPoint = new Point3d(sourceLine.StartPoint.X, sourceLine.StartPoint.Y, 0);
+                    line.EndPoint = new Point3d(sourceLine.EndPoint.X, sourceLine.EndPoint.Y, 0);
+                }
+                else
+                {
+                    clone = curve.Clone() as Curve;
+                    if (clone == null) return null;
+
+                    Extents3d extents = clone.GeometricExtents;
+                    double zRange = Math.Abs(extents.MaxPoint.Z - extents.MinPoint.Z);
+                    if (zRange > 1e-6)
+                    {
+                        logger?.Invoke("Bỏ qua curve không nằm trên mặt phẳng song song WCS XY.");
+                        clone.Dispose();
+                        return null;
+                    }
+
+                    double elevation = (extents.MinPoint.Z + extents.MaxPoint.Z) / 2.0;
+                    clone.TransformBy(Matrix3d.Displacement(new Vector3d(0, 0, -elevation)));
+                }
+
+                Extents3d validationExtents = clone.GeometricExtents;
+                return clone;
+            }
+            catch (Exception ex)
+            {
+                logger?.Invoke("Không thể chuẩn hóa curve: " + ex.Message);
+                if (clone != null && !clone.IsDisposed) clone.Dispose();
+                return null;
+            }
+        }
+
+        private static bool IsPositiveWorldZ(Vector3d normal)
+        {
+            return normal.Length > 1e-9 &&
+                   normal.GetNormal().DotProduct(Vector3d.ZAxis) >= 1.0 - 1e-9;
+        }
+
+        public static List<List<Curve>> ClusterCurves(
+            List<Curve> curves,
+            double gapTolerance,
+            Action<string> logger = null)
+        {
+            if (curves == null) throw new ArgumentNullException(nameof(curves));
+            if (curves.Count == 0) return new List<List<Curve>>();
+
+            List<CurveBounds> bounds = BuildBounds(curves, logger);
+            var unionFind = new UnionFind(curves.Count);
+
+            foreach (Tuple<int, int> pair in GetCandidatePairs(bounds, gapTolerance))
+            {
+                CurveBounds first = bounds[pair.Item1];
+                CurveBounds second = bounds[pair.Item2];
+                if (AreExtentsNear(first.Extents, second.Extents, gapTolerance))
+                {
+                    unionFind.Union(first.Index, second.Index);
+                }
+            }
+
+            var groups = new Dictionary<int, List<Curve>>();
             for (int i = 0; i < curves.Count; i++)
             {
-                Point3d[] pts = { curves[i].StartPoint, curves[i].EndPoint };
-                Extents3d ext1 = GetBufferedExtents(curves[i], WallConstants.GapTolerance);
-
-                for (int j = i + 1; j < curves.Count; j++) 
+                int root = unionFind.Find(i);
+                if (!groups.TryGetValue(root, out List<Curve> cluster))
                 {
-                    Extents3d ext2 = GetBufferedExtents(curves[j], WallConstants.GapTolerance);
-                    if (!IsIntersect(ext1, ext2)) continue; // Lọc nhanh bằng BoundingBox Bounding Hashing
+                    cluster = new List<Curve>();
+                    groups[root] = cluster;
+                }
+                cluster.Add(curves[i]);
+            }
 
-                    try
-                    {
-                        foreach (Point3d pt in pts)
-                        {
-                            Point3d closest = curves[j].GetClosestPointTo(pt, false);
-                            double dist = pt.DistanceTo(closest);
-                            if (dist > 1e-4 && dist <= WallConstants.GapTolerance) 
-                            {
-                                bridges.Add(new Line(pt, closest));
-                            }
-                        }
+            return groups.Values.ToList();
+        }
 
-                        // Lặp ngược do đã cắt vòng lặp qua j = i + 1
-                        Point3d[] jPts = { curves[j].StartPoint, curves[j].EndPoint };
-                        foreach (Point3d jp in jPts)
-                        {
-                            Point3d jClosest = curves[i].GetClosestPointTo(jp, false);
-                            double jDist = jp.DistanceTo(jClosest);
-                            if (jDist > 1e-4 && jDist <= WallConstants.GapTolerance)
-                            {
-                                bridges.Add(new Line(jp, jClosest));
-                            }
-                        }
-                    }
-                    catch (System.Exception ex)
+        private static List<CurveBounds> BuildBounds(IReadOnlyList<Curve> curves, Action<string> logger)
+        {
+            var result = new List<CurveBounds>(curves.Count);
+            for (int i = 0; i < curves.Count; i++)
+            {
+                try
+                {
+                    result.Add(new CurveBounds { Index = i, Extents = curves[i].GeometricExtents });
+                }
+                catch (Exception ex)
+                {
+                    logger?.Invoke($"Không đọc được extents của curve {i}: {ex.Message}");
+                    Point3d point = curves[i].StartPoint;
+                    result.Add(new CurveBounds
                     {
-                        LogMessage($"Lỗi tính điểm nối khe hở: {ex.Message}");
-                    }
+                        Index = i,
+                        Extents = new Extents3d(point, point)
+                    });
                 }
             }
-            return bridges;
+
+            result.Sort((first, second) => first.Extents.MinPoint.X.CompareTo(second.Extents.MinPoint.X));
+            return result;
         }
 
-        public static List<Curve> CollectCurves(Transaction tr, IEnumerable<ObjectId> ids)
+        private static IEnumerable<Tuple<int, int>> GetCandidatePairs(
+            IReadOnlyList<CurveBounds> sortedBounds,
+            double gapTolerance)
         {
-            List<Curve> results = new List<Curve>();
-            foreach (ObjectId id in ids)
+            for (int first = 0; first < sortedBounds.Count; first++)
             {
-                Entity ent = tr.GetObject(id, OpenMode.ForRead) as Entity;
-                ExtractRecursive(ent, results);
-            }
-            return results;
-        }
-
-        private static void ExtractRecursive(Entity ent, List<Curve> results)
-        {
-            if (ent is BlockReference br)
-            {
-                using (DBObjectCollection exploded = new DBObjectCollection())
+                double maxX = sortedBounds[first].Extents.MaxPoint.X + gapTolerance;
+                for (int second = first + 1; second < sortedBounds.Count; second++)
                 {
-                    try 
-                    { 
-                        br.Explode(exploded); 
-                        foreach (Entity sub in exploded)
-                        {
-                            ExtractRecursive(sub, results);
-                        }
-                    } 
-                    catch (System.Exception ex) 
+                    if (sortedBounds[second].Extents.MinPoint.X > maxX) break;
+                    yield return Tuple.Create(first, second);
+                }
+            }
+        }
+
+        private static bool AreExtentsNear(Extents3d first, Extents3d second, double gap)
+        {
+            return first.MinPoint.X <= second.MaxPoint.X + gap &&
+                   first.MaxPoint.X + gap >= second.MinPoint.X &&
+                   first.MinPoint.Y <= second.MaxPoint.Y + gap &&
+                   first.MaxPoint.Y + gap >= second.MinPoint.Y;
+        }
+
+        public static BoundaryBuildResult ProcessClusterToBoundaries(
+            List<Curve> cluster,
+            double gapTolerance,
+            double vertexTolerance,
+            Action<string> logger = null)
+        {
+            if (cluster == null) throw new ArgumentNullException(nameof(cluster));
+
+            var result = new BoundaryBuildResult();
+            List<Curve> bridges = CreateBridges(cluster, gapTolerance, vertexTolerance, logger);
+            var workingCurves = new List<Curve>(cluster);
+            workingCurves.AddRange(bridges);
+
+            try
+            {
+                DBObjectCollection input = new DBObjectCollection();
+                DBObjectCollection regions = null;
+                var mergedRegions = new List<Region>();
+                var unmergedRegions = new List<Region>();
+
+                try
+                {
+                foreach (Curve curve in workingCurves) input.Add(curve);
+                regions = Region.CreateFromCurves(input);
+
+                foreach (DBObject item in regions)
+                {
+                    if (item is Region region)
                     {
-                        LogMessage($"Lỗi bung BlockReference: {ex.Message}");
+                        unmergedRegions.Add(region);
+                    }
+                    else if (item != null && !item.IsDisposed)
+                    {
+                        item.Dispose();
+                    }
+                }
+
+                regions.Dispose();
+                regions = null;
+
+                while (unmergedRegions.Count > 0)
+                {
+                    Region region = unmergedRegions[0];
+                    unmergedRegions.RemoveAt(0);
+                    MergeRegion(mergedRegions, region, logger);
+                }
+
+                foreach (Region region in mergedRegions)
+                {
+                    DBObjectCollection exploded = new DBObjectCollection();
+                    try
+                    {
+                        region.Explode(exploded);
+                        List<Curve> parts = exploded.Cast<DBObject>().OfType<Curve>().ToList();
+                        List<Polyline> loops = JoinClosedCurves(
+                            parts,
+                            vertexTolerance,
+                            vertexTolerance,
+                            logger);
+                        result.Boundaries.AddRange(loops);
+                    }
+                    catch (Exception ex)
+                    {
+                        result.Warnings.Add("Không thể trích boundary từ Region: " + ex.Message);
+                        logger?.Invoke(ex.ToString());
                     }
                     finally
                     {
-                        // Rất quan trọng: Dispose Entity rác bung ra từ Block để tránh Leak RAM
-                        DisposeCollection(exploded);
+                        DisposeCollection(exploded, disposeItems: true);
                     }
                 }
+                }
+                catch (Exception ex)
+                {
+                    result.Warnings.Add("Không thể tạo Region: " + ex.Message);
+                    logger?.Invoke(ex.ToString());
+                }
+                finally
+                {
+                    if (regions != null)
+                    {
+                        // Region items are transferred to unmergedRegions/mergedRegions.
+                        regions.Dispose();
+                    }
+
+                    foreach (Region region in mergedRegions)
+                    {
+                        if (region != null && !region.IsDisposed) region.Dispose();
+                    }
+
+                    foreach (Region region in unmergedRegions)
+                    {
+                        if (region != null && !region.IsDisposed) region.Dispose();
+                    }
+
+                    input.Dispose();
+                }
+
+                if (result.Boundaries.Count == 0)
+                {
+                    result.UsedFallback = true;
+                    List<Polyline> fallback = JoinClosedCurves(
+                        workingCurves,
+                        gapTolerance,
+                        vertexTolerance,
+                        logger);
+                    result.Boundaries.AddRange(fallback);
+                    if (fallback.Count == 0)
+                    {
+                        result.Warnings.Add("Cụm curve không tạo được đường bao kín an toàn.");
+                    }
+                    else
+                    {
+                        result.Warnings.Add("Đã dùng phương án nối curve dự phòng do Region không tạo được kết quả.");
+                    }
+                }
+
+                return result;
             }
-            else if (ent is Curve cv) 
-            { 
-                Curve c = Sanitize(cv); 
-                if (c != null) results.Add(c); 
+            catch (Exception)
+            {
+                result.DisposeBoundaries();
+                throw;
             }
-            
-            // Dispose entity lẻ mà tự Explode sinh ra không nằm trong quản lý Database
-            if (ent != null && ent.Database == null && !ent.IsDisposed) ent.Dispose();
+            finally
+            {
+                foreach (Curve bridge in bridges)
+                {
+                    if (bridge != null && !bridge.IsDisposed) bridge.Dispose();
+                }
+            }
         }
 
-        private static Curve Sanitize(Curve cv)
+        private static void MergeRegion(List<Region> mergedRegions, Region current, Action<string> logger)
+        {
+            for (int i = mergedRegions.Count - 1; i >= 0; i--)
+            {
+                Region existing = mergedRegions[i];
+                bool mayIntersect;
+                try
+                {
+                    mayIntersect = AreExtentsNear(existing.GeometricExtents, current.GeometricExtents, 0);
+                }
+                catch (Exception ex)
+                {
+                    logger?.Invoke("Không thể đọc extents của Region; vẫn thử union: " + ex.Message);
+                    mayIntersect = true;
+                }
+
+                if (!mayIntersect) continue;
+
+                try
+                {
+                    current.BooleanOperation(BooleanOperationType.BoolUnite, existing);
+                    existing.Dispose();
+                    mergedRegions.RemoveAt(i);
+                }
+                catch (Exception ex)
+                {
+                    logger?.Invoke("Không thể union hai Region giao nhau: " + ex.Message);
+                }
+            }
+
+            mergedRegions.Add(current);
+        }
+
+        private static List<Curve> CreateBridges(
+            IReadOnlyList<Curve> curves,
+            double gapTolerance,
+            double vertexTolerance,
+            Action<string> logger)
+        {
+            var bridges = new List<Curve>();
+            if (gapTolerance <= vertexTolerance || curves.Count < 2) return bridges;
+
+            List<CurveBounds> bounds = BuildBounds(curves, logger);
+            var bestByEndpoint = new Dictionary<string, BridgeCandidate>();
+
+            foreach (Tuple<int, int> pair in GetCandidatePairs(bounds, gapTolerance))
+            {
+                CurveBounds firstBounds = bounds[pair.Item1];
+                CurveBounds secondBounds = bounds[pair.Item2];
+                if (!AreExtentsNear(firstBounds.Extents, secondBounds.Extents, gapTolerance)) continue;
+
+                Curve first = curves[firstBounds.Index];
+                Curve second = curves[secondBounds.Index];
+                ConsiderEndpoint(firstBounds.Index, 0, first.StartPoint, second, bestByEndpoint, gapTolerance, vertexTolerance, logger);
+                ConsiderEndpoint(firstBounds.Index, 1, first.EndPoint, second, bestByEndpoint, gapTolerance, vertexTolerance, logger);
+                ConsiderEndpoint(secondBounds.Index, 0, second.StartPoint, first, bestByEndpoint, gapTolerance, vertexTolerance, logger);
+                ConsiderEndpoint(secondBounds.Index, 1, second.EndPoint, first, bestByEndpoint, gapTolerance, vertexTolerance, logger);
+            }
+
+            foreach (BridgeCandidate candidate in bestByEndpoint.Values.OrderBy(value => value.Distance))
+            {
+                bool duplicate = bridges.OfType<Line>().Any(line =>
+                    SameSegment(line.StartPoint, line.EndPoint, candidate.From, candidate.To, vertexTolerance));
+                if (!duplicate)
+                {
+                    bridges.Add(new Line(candidate.From, candidate.To));
+                }
+            }
+
+            return bridges;
+        }
+
+        private static void ConsiderEndpoint(
+            int curveIndex,
+            int endpointIndex,
+            Point3d endpoint,
+            Curve other,
+            IDictionary<string, BridgeCandidate> bestByEndpoint,
+            double gapTolerance,
+            double vertexTolerance,
+            Action<string> logger)
         {
             try
             {
-                if (cv.EndParam - cv.StartParam < 1e-6) return null;
-                Curve clone = cv.Clone() as Curve;
-                if (clone is Polyline pl) { pl.Normal = Vector3d.ZAxis; pl.Elevation = 0; }
-                else if (clone is Line ln) { ln.StartPoint = new Point3d(ln.StartPoint.X, ln.StartPoint.Y, 0); ln.EndPoint = new Point3d(ln.EndPoint.X, ln.EndPoint.Y, 0); }
-                return clone;
+                Point3d closest = other.GetClosestPointTo(endpoint, false);
+                double distance = endpoint.DistanceTo(closest);
+                if (distance <= vertexTolerance || distance > gapTolerance) return;
+
+                string key = curveIndex + ":" + endpointIndex;
+                if (!bestByEndpoint.TryGetValue(key, out BridgeCandidate current) || distance < current.Distance)
+                {
+                    bestByEndpoint[key] = new BridgeCandidate
+                    {
+                        From = endpoint,
+                        To = closest,
+                        Distance = distance
+                    };
+                }
             }
-            catch (System.Exception ex) 
+            catch (Exception ex)
             {
-                LogMessage($"Cảnh báo làm sạch Curve: {ex.Message}");
-                return null; 
+                logger?.Invoke("Không thể tìm bridge gần nhất: " + ex.Message);
             }
         }
 
-        public static List<List<Curve>> ClusterCurves(List<Curve> allCurves)
+        private static bool SameSegment(
+            Point3d firstStart,
+            Point3d firstEnd,
+            Point3d secondStart,
+            Point3d secondEnd,
+            double tolerance)
         {
-            List<List<Curve>> clusters = new List<List<Curve>>(); 
-            List<Curve> pool = new List<Curve>(allCurves);
+            return (firstStart.DistanceTo(secondStart) <= tolerance &&
+                    firstEnd.DistanceTo(secondEnd) <= tolerance) ||
+                   (firstStart.DistanceTo(secondEnd) <= tolerance &&
+                    firstEnd.DistanceTo(secondStart) <= tolerance);
+        }
 
-            while (pool.Count > 0)
+        private static List<Polyline> JoinClosedCurves(
+            IEnumerable<Curve> sourceParts,
+            double closureTolerance,
+            double areaTolerance,
+            Action<string> logger)
+        {
+            var working = new List<Curve>();
+            foreach (Curve source in sourceParts)
             {
-                List<Curve> currentCluster = new List<Curve>(); 
-                Curve seed = pool[0]; 
-                pool.RemoveAt(0); 
-                currentCluster.Add(seed);
+                Curve clone = source?.Clone() as Curve;
+                if (clone != null) working.Add(clone);
+            }
 
-                for (int i = 0; i < currentCluster.Count; i++)
+            var result = new List<Polyline>();
+            try
+            {
+                while (working.Count > 0)
                 {
-                    Extents3d memberExt = GetBufferedExtents(currentCluster[i], WallConstants.GapTolerance);
-                    for (int j = pool.Count - 1; j >= 0; j--)
+                    Curve seed = working[0];
+                    working.RemoveAt(0);
+                    Polyline polyline;
+                    try
                     {
-                        if (IsIntersect(memberExt, pool[j].GeometricExtents)) 
-                        { 
-                            currentCluster.Add(pool[j]); 
-                            pool.RemoveAt(j); 
+                        polyline = CurveToPolyline(seed, areaTolerance);
+                    }
+                    finally
+                    {
+                        seed.Dispose();
+                    }
+
+                    if (polyline == null) continue;
+
+                    bool added;
+                    do
+                    {
+                        added = false;
+                        for (int i = working.Count - 1; i >= 0; i--)
+                        {
+                            if (!EndpointsCanJoin(polyline, working[i], closureTolerance, logger))
+                            {
+                                continue;
+                            }
+
+                            try
+                            {
+                                polyline.JoinEntity(working[i]);
+                                working[i].Dispose();
+                                working.RemoveAt(i);
+                                added = true;
+                            }
+                            catch (Exception ex)
+                            {
+                                logger?.Invoke("Curve không thể join vào loop hiện tại: " + ex.Message);
+                            }
+                        }
+                    }
+                    while (added);
+
+                    if (polyline.NumberOfVertices < 2)
+                    {
+                        polyline.Dispose();
+                        continue;
+                    }
+
+                    if (!polyline.Closed)
+                    {
+                        double closingGap = polyline.GetPoint3dAt(0)
+                            .DistanceTo(polyline.GetPoint3dAt(polyline.NumberOfVertices - 1));
+                        if (closingGap <= closureTolerance)
+                        {
+                            polyline.Closed = true;
+                        }
+                        else
+                        {
+                            logger?.Invoke($"Bỏ chuỗi hở; khe đóng {closingGap:0.###} lớn hơn dung sai {closureTolerance:0.###}.");
+                            polyline.Dispose();
+                            continue;
+                        }
+                    }
+
+                    try
+                    {
+                        if (polyline.Area > areaTolerance * areaTolerance)
+                        {
+                            result.Add(polyline);
+                        }
+                        else
+                        {
+                            polyline.Dispose();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.Invoke("Không thể tính diện tích boundary; đã bỏ boundary lỗi: " + ex.Message);
+                        polyline.Dispose();
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                foreach (Polyline polyline in result)
+                {
+                    if (polyline != null && !polyline.IsDisposed) polyline.Dispose();
+                }
+                result.Clear();
+                throw;
+            }
+            finally
+            {
+                foreach (Curve curve in working)
+                {
+                    if (curve != null && !curve.IsDisposed) curve.Dispose();
+                }
+            }
+
+            return result;
+        }
+
+        private static bool EndpointsCanJoin(
+            Curve first,
+            Curve second,
+            double tolerance,
+            Action<string> logger)
+        {
+            try
+            {
+                Point3d firstStart = first.StartPoint;
+                Point3d firstEnd = first.EndPoint;
+                Point3d secondStart = second.StartPoint;
+                Point3d secondEnd = second.EndPoint;
+                return firstStart.DistanceTo(secondStart) <= tolerance ||
+                       firstStart.DistanceTo(secondEnd) <= tolerance ||
+                       firstEnd.DistanceTo(secondStart) <= tolerance ||
+                       firstEnd.DistanceTo(secondEnd) <= tolerance;
+            }
+            catch (Exception ex)
+            {
+                logger?.Invoke("Không thể đọc endpoint để kiểm tra join: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static Polyline CurveToPolyline(Curve curve, double tolerance)
+        {
+            if (curve is Polyline sourcePolyline)
+            {
+                return sourcePolyline.Clone() as Polyline;
+            }
+
+            var polyline = new Polyline();
+            if (curve is Line line)
+            {
+                polyline.AddVertexAt(0, ToPoint2d(line.StartPoint), 0, 0, 0);
+                polyline.AddVertexAt(1, ToPoint2d(line.EndPoint), 0, 0, 0);
+                return polyline;
+            }
+
+            if (curve is Arc arc)
+            {
+                double bulge = Math.Tan(arc.TotalAngle / 4.0);
+                if (arc.Normal.Z < 0) bulge = -bulge;
+                polyline.AddVertexAt(0, ToPoint2d(arc.StartPoint), bulge, 0, 0);
+                polyline.AddVertexAt(1, ToPoint2d(arc.EndPoint), 0, 0, 0);
+                return polyline;
+            }
+
+            const int sampleSegments = 24;
+            double parameterRange = curve.EndParam - curve.StartParam;
+            int vertexIndex = 0;
+            Point2d previous = default(Point2d);
+            for (int i = 0; i <= sampleSegments; i++)
+            {
+                double parameter = curve.StartParam + parameterRange * i / sampleSegments;
+                Point2d point = ToPoint2d(curve.GetPointAtParameter(parameter));
+                if (vertexIndex == 0 || point.GetDistanceTo(previous) > tolerance)
+                {
+                    polyline.AddVertexAt(vertexIndex++, point, 0, 0, 0);
+                    previous = point;
+                }
+            }
+
+            if (vertexIndex < 2)
+            {
+                polyline.Dispose();
+                return null;
+            }
+            return polyline;
+        }
+
+        public static bool TryGetClusterSnapVector(
+            Extents3d clusterExtents,
+            IEnumerable<Curve> candidates,
+            double searchRadius,
+            double vertexTolerance,
+            out Vector3d bestShift)
+        {
+            bestShift = new Vector3d();
+            double minimumDistance = searchRadius + vertexTolerance;
+            bool found = false;
+
+            Point3d[] corners =
+            {
+                new Point3d(clusterExtents.MinPoint.X, clusterExtents.MaxPoint.Y, 0),
+                new Point3d(clusterExtents.MaxPoint.X, clusterExtents.MaxPoint.Y, 0),
+                new Point3d(clusterExtents.MinPoint.X, clusterExtents.MinPoint.Y, 0),
+                new Point3d(clusterExtents.MaxPoint.X, clusterExtents.MinPoint.Y, 0)
+            };
+
+            foreach (Curve candidate in candidates ?? Enumerable.Empty<Curve>())
+            {
+                foreach (Point3d externalPoint in GetVertices(candidate))
+                {
+                    foreach (Point3d corner in corners)
+                    {
+                        double distance = ToPoint2d(corner).GetDistanceTo(ToPoint2d(externalPoint));
+                        if (distance > vertexTolerance && distance < minimumDistance)
+                        {
+                            minimumDistance = distance;
+                            bestShift = externalPoint - corner;
+                            found = true;
                         }
                     }
                 }
-                clusters.Add(currentCluster);
             }
-            return clusters;
+
+            return found;
         }
 
-        private static Extents3d GetBufferedExtents(Curve cv, double buffer)
+        private static IEnumerable<Point3d> GetVertices(Curve curve)
+        {
+            if (curve is Polyline polyline)
+            {
+                for (int i = 0; i < polyline.NumberOfVertices; i++)
+                {
+                    yield return polyline.GetPoint3dAt(i);
+                }
+                yield break;
+            }
+
+            yield return curve.StartPoint;
+            if (curve.EndPoint.DistanceTo(curve.StartPoint) > 1e-9)
+            {
+                yield return curve.EndPoint;
+            }
+        }
+
+        public static Entity CreateBeautifiedClone(
+            Entity entity,
+            Point2d originalAnchor,
+            Point2d targetAnchor,
+            double snapStep,
+            double vertexTolerance,
+            out string rejectionReason)
+        {
+            rejectionReason = null;
+
+            if (entity is Line sourceLine)
+            {
+                var line = sourceLine.Clone() as Line;
+                Point2d start = SnapPoint(ToPoint2d(sourceLine.StartPoint), originalAnchor, targetAnchor, snapStep);
+                Point2d end = SnapPoint(ToPoint2d(sourceLine.EndPoint), originalAnchor, targetAnchor, snapStep);
+                if (start.GetDistanceTo(end) <= vertexTolerance)
+                {
+                    line.Dispose();
+                    rejectionReason = "Line bị co về chiều dài bằng 0 sau khi làm đẹp.";
+                    return null;
+                }
+
+                line.StartPoint = new Point3d(start.X, start.Y, sourceLine.StartPoint.Z);
+                line.EndPoint = new Point3d(end.X, end.Y, sourceLine.EndPoint.Z);
+                return line;
+            }
+
+            if (entity is Polyline sourcePolyline)
+            {
+                var polyline = sourcePolyline.Clone() as Polyline;
+                for (int i = 0; i < sourcePolyline.NumberOfVertices; i++)
+                {
+                    Point2d snapped = SnapPoint(
+                        sourcePolyline.GetPoint2dAt(i),
+                        originalAnchor,
+                        targetAnchor,
+                        snapStep);
+                    polyline.SetPointAt(i, snapped);
+                }
+
+                for (int i = 1; i < polyline.NumberOfVertices; i++)
+                {
+                    if (polyline.GetPoint2dAt(i - 1).GetDistanceTo(polyline.GetPoint2dAt(i)) <= vertexTolerance)
+                    {
+                        polyline.Dispose();
+                        rejectionReason = "Hai đỉnh liên tiếp bị trùng sau khi làm đẹp.";
+                        return null;
+                    }
+                }
+
+                if (polyline.Closed &&
+                    polyline.NumberOfVertices > 2 &&
+                    polyline.GetPoint2dAt(0).GetDistanceTo(polyline.GetPoint2dAt(polyline.NumberOfVertices - 1)) <= vertexTolerance)
+                {
+                    polyline.Dispose();
+                    rejectionReason = "Cạnh đóng bị co về chiều dài bằng 0 sau khi làm đẹp.";
+                    return null;
+                }
+
+                return polyline;
+            }
+
+            rejectionReason = "Chỉ hỗ trợ LINE và LWPOLYLINE.";
+            return null;
+        }
+
+        private static Point2d SnapPoint(
+            Point2d point,
+            Point2d originalAnchor,
+            Point2d targetAnchor,
+            double snapStep)
+        {
+            double deltaX = point.X - originalAnchor.X;
+            double deltaY = point.Y - originalAnchor.Y;
+            return new Point2d(
+                targetAnchor.X + NumericGeometry.RoundToStep(deltaX, snapStep),
+                targetAnchor.Y + NumericGeometry.RoundToStep(deltaY, snapStep));
+        }
+
+        public static List<Entity> CreateFinishOffsets(
+            Polyline boundary,
+            double distance,
+            FinishOffsetMode mode,
+            Action<string> logger = null)
+        {
+            if (boundary == null) throw new ArgumentNullException(nameof(boundary));
+            if (distance <= 0 || double.IsNaN(distance) || double.IsInfinity(distance))
+            {
+                throw new ArgumentOutOfRangeException(nameof(distance));
+            }
+
+            List<Entity> positive = GetOffsetEntities(boundary, distance, logger);
+            List<Entity> negative = GetOffsetEntities(boundary, -distance, logger);
+            var selected = new List<Entity>();
+            try
+            {
+                double originalArea = SafeArea(boundary, logger);
+                double positiveArea = positive.Sum(entity => SafeArea(entity, logger));
+                double negativeArea = negative.Sum(entity => SafeArea(entity, logger));
+
+                List<Entity> outside;
+                List<Entity> inside;
+                if (positiveArea >= negativeArea)
+                {
+                    outside = positive;
+                    inside = negative;
+                }
+                else
+                {
+                    outside = negative;
+                    inside = positive;
+                }
+
+                if (outside.Count == 0 &&
+                    inside.Count > 0 &&
+                    inside.Sum(entity => SafeArea(entity, logger)) > originalArea)
+                {
+                    outside = inside;
+                    inside = new List<Entity>();
+                }
+
+                if (mode == FinishOffsetMode.Outside || mode == FinishOffsetMode.Both)
+                {
+                    selected.AddRange(outside);
+                }
+                if (mode == FinishOffsetMode.Inside || mode == FinishOffsetMode.Both)
+                {
+                    selected.AddRange(inside);
+                }
+
+                foreach (Entity entity in positive.Concat(negative).Except(selected).Distinct())
+                {
+                    if (entity != null && !entity.IsDisposed) entity.Dispose();
+                }
+
+                return selected;
+            }
+            catch (Exception)
+            {
+                foreach (Entity entity in positive.Concat(negative).Distinct())
+                {
+                    if (entity != null && !entity.IsDisposed) entity.Dispose();
+                }
+                selected.Clear();
+                throw;
+            }
+        }
+
+        private static List<Entity> GetOffsetEntities(Polyline boundary, double distance, Action<string> logger)
+        {
+            DBObjectCollection offsets = null;
+            var entities = new List<Entity>();
+            try
+            {
+                offsets = boundary.GetOffsetCurves(distance);
+                foreach (DBObject item in offsets)
+                {
+                    if (item is Entity entity)
+                    {
+                        entities.Add(entity);
+                    }
+                    else if (item != null && !item.IsDisposed)
+                    {
+                        item.Dispose();
+                    }
+                }
+
+                offsets.Dispose();
+                offsets = null;
+            }
+            catch (Exception ex)
+            {
+                logger?.Invoke($"Offset {distance:0.###} thất bại: {ex.Message}");
+                if (offsets != null)
+                {
+                    DisposeCollection(offsets, disposeItems: true);
+                    offsets = null;
+                }
+                foreach (Entity entity in entities)
+                {
+                    if (entity != null && !entity.IsDisposed) entity.Dispose();
+                }
+                entities.Clear();
+            }
+            return entities;
+        }
+
+        private static double SafeArea(Entity entity, Action<string> logger)
         {
             try
             {
-                Extents3d e = cv.GeometricExtents;
-                return new Extents3d(new Point3d(e.MinPoint.X - buffer, e.MinPoint.Y - buffer, 0), new Point3d(e.MaxPoint.X + buffer, e.MaxPoint.Y + buffer, 0));
+                return entity is Curve curve ? Math.Abs(curve.Area) : 0;
             }
-            catch
+            catch (Exception ex)
             {
-                // Khá hiếm nhưng geometric bounds với object hư cấu có thể failed. Bỏ qua. Xử lý an toàn nhất.
-                return new Extents3d();
+                logger?.Invoke("Không thể tính diện tích curve: " + ex.Message);
+                return 0;
             }
         }
 
-        private static bool IsIntersect(Extents3d e1, Extents3d e2)
+        private static Point2d ToPoint2d(Point3d point)
         {
-            if (e1.MinPoint == e1.MaxPoint && e2.MinPoint == e2.MaxPoint) return false;
-            return (e1.MinPoint.X <= e2.MaxPoint.X && e1.MaxPoint.X >= e2.MinPoint.X && e1.MinPoint.Y <= e2.MaxPoint.Y && e1.MaxPoint.Y >= e2.MinPoint.Y);
-        }
-
-        private static List<Polyline> JoinCurves(List<Curve> parts)
-        {
-            List<Polyline> res = new List<Polyline>();
-            while (parts.Count > 0)
-            {
-                Curve c = parts[0]; parts.RemoveAt(0); 
-                Polyline pl = (c is Polyline) ? (Polyline)c.Clone() : new Polyline();
-                
-                if (!(c is Polyline)) 
-                { 
-                    pl.AddVertexAt(0, new Point2d(c.StartPoint.X, c.StartPoint.Y), 0, 0, 0); 
-                    pl.AddVertexAt(1, new Point2d(c.EndPoint.X, c.EndPoint.Y), 0, 0, 0); 
-                }
-
-                bool added = true;
-                while (added) 
-                { 
-                    added = false; 
-                    for (int i = parts.Count - 1; i >= 0; i--) 
-                    {
-                        try 
-                        { 
-                            pl.JoinEntity(parts[i]); 
-                            parts.RemoveAt(i); 
-                            added = true; 
-                        } 
-                        catch (System.Exception) 
-                        {
-                            // Hành vi có chủ đích: Phép vòng lặp là Try-Join. 
-                            // Việc chối từ nối vào xảy ra rất tự nhiên nếu đường nét chưa tới lượt chạm cạnh.
-                            // Không được phép log ở đây để tránh Spam Output của User.
-                        } 
-                    } 
-                }
-                
-                pl.Closed = true; 
-                if (pl.Area > 1e-4) res.Add(pl); 
-                else pl.Dispose();
-            }
-            return res;
+            return new Point2d(point.X, point.Y);
         }
     }
 }

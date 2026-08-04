@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
 
@@ -7,56 +10,129 @@ namespace ProWallTools
 {
     public class Commands
     {
-        [CommandMethod("BW", CommandFlags.UsePickSet | CommandFlags.Modal)]
+        [CommandMethod(WallConstants.BeautifyCommandName, CommandFlags.UsePickSet | CommandFlags.Modal)]
         public void BeautifyWallsCommand()
         {
-            try
+            ExecuteInActiveDocument(WallConstants.BeautifyCommandName, document =>
             {
-                WallJoinLogic.ExecuteBeautifyWalls();
-            }
-            catch (System.Exception ex)
-            {
-                Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[LỖI] " + ex.Message);
-            }
+                WallSelectionResult selection = WallInteraction.GetSelection(
+                    document.Editor,
+                    "\nChọn LINE hoặc LWPOLYLINE cần làm đẹp: ",
+                    "LINE,LWPOLYLINE");
+                if (!CanContinue(selection, document)) return;
+
+                WallJoinLogic.ExecuteBeautifyWalls(document, selection.ObjectIds);
+            });
         }
 
-        [CommandMethod("WJ", CommandFlags.UsePickSet | CommandFlags.Modal)]
+        [CommandMethod(WallConstants.WallJoinCommandName, CommandFlags.UsePickSet | CommandFlags.Modal)]
         public void WallJoinCommand()
         {
-            try
-            {
-                WallJoinLogic.ExecuteWallJoin(isFinishing: false);
-            }
-            catch (System.Exception ex)
-            {
-                Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[LỖI] " + ex.Message);
-            }
+            ExecuteWallJoinCommand(isFinishing: false);
         }
 
-        [CommandMethod("FW", CommandFlags.UsePickSet | CommandFlags.Modal)]
+        [CommandMethod(WallConstants.FinishWallCommandName, CommandFlags.UsePickSet | CommandFlags.Modal)]
         public void FinishingWallCommand()
         {
+            ExecuteWallJoinCommand(isFinishing: true);
+        }
+
+        [CommandMethod(WallConstants.SettingsCommandName, CommandFlags.Modal)]
+        public void ShowWallJoinUICommand()
+        {
+            ExecuteInActiveDocument(WallConstants.SettingsCommandName, document =>
+            {
+                IReadOnlyList<string> layerNames;
+                using (DocumentLock documentLock = document.LockDocument())
+                {
+                    layerNames = LayerService.GetLayerNames(document.Database);
+                }
+
+                var window = new WallJoinWindow(layerNames, WallSettingsService.Current);
+                Application.ShowModalWindow(window);
+                if (window.DialogResult == true && window.SavedSettings != null)
+                {
+                    WallSettingsService.Save(window.SavedSettings);
+                }
+            });
+        }
+
+        private static void ExecuteWallJoinCommand(bool isFinishing)
+        {
+            string commandName = isFinishing
+                ? WallConstants.FinishWallCommandName
+                : WallConstants.WallJoinCommandName;
+            ExecuteInActiveDocument(commandName, document =>
+            {
+                WallSelectionResult selection = WallInteraction.GetSelection(
+                    document.Editor,
+                    "\nChọn LINE, POLYLINE hoặc block đường bao tường: ",
+                    "LINE,LWPOLYLINE,POLYLINE,INSERT");
+                if (!CanContinue(selection, document)) return;
+
+                WallJoinLogic.ExecuteWallJoin(document, selection.ObjectIds, isFinishing);
+            });
+        }
+
+        private static bool CanContinue(WallSelectionResult selection, Document document)
+        {
+            if (selection.Outcome == WallPromptOutcome.Cancelled) return false;
+            if (selection.Outcome == WallPromptOutcome.Error)
+            {
+                document.Editor.WriteMessage("\n[Wall Joiner] Không thể đọc selection.");
+                return false;
+            }
+            if (selection.ObjectIds.Count > 0) return true;
+
+            document.Editor.WriteMessage("\n[Wall Joiner] Selection không chứa đối tượng hợp lệ.");
+            return false;
+        }
+
+        private static void ExecuteInActiveDocument(string commandName, Action<Document> action)
+        {
+            Document document = null;
             try
             {
-                WallJoinLogic.ExecuteWallJoin(isFinishing: true);
+                document = Application.DocumentManager.MdiActiveDocument;
+                if (document == null) return;
+                action(document);
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception ex)
+            {
+                ReportError(commandName, document, ex);
             }
             catch (System.Exception ex)
             {
-                Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[LỖI] " + ex.Message);
+                ReportError(commandName, document, ex);
             }
         }
 
-        [CommandMethod("WJ_UI", CommandFlags.Modal)]
-        public void ShowWallJoinUICommand()
+        private static void ReportError(string commandName, Document document, System.Exception exception)
         {
+            if (document == null)
+            {
+                Debug.WriteLine($"[{commandName}] No active document{Environment.NewLine}{exception}");
+                return;
+            }
+
+            string documentName;
             try
             {
-                var window = new WallJoinWindow();
-                Application.ShowModalWindow(window);
+                documentName = document.Name;
             }
-            catch (System.Exception ex)
+            catch (System.Exception nameException)
             {
-                Application.DocumentManager.MdiActiveDocument?.Editor.WriteMessage("\n[LỖI] Không thể hiển thị giao diện: " + ex.Message);
+                documentName = "<unavailable: " + nameException.Message + ">";
+            }
+
+            Debug.WriteLine($"[{commandName}] Document='{documentName}'{Environment.NewLine}{exception}");
+            try
+            {
+                document.Editor.WriteMessage($"\n[{commandName}] Lỗi: {exception.Message}");
+            }
+            catch (System.Exception writeException)
+            {
+                Debug.WriteLine($"[{commandName}] Cannot write command error{Environment.NewLine}{writeException}");
             }
         }
     }

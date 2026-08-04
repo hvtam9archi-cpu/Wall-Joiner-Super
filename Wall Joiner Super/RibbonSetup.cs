@@ -1,6 +1,9 @@
 using System;
-using System.IO;
-using System.Reflection;
+using System.Diagnostics;
+using System.Linq;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.Runtime;
 using Autodesk.Windows;
@@ -9,23 +12,23 @@ using Autodesk.Windows;
 
 namespace ProWallTools
 {
-    public class RibbonSetup : IExtensionApplication
+    public sealed class RibbonSetup : IExtensionApplication
     {
         public void Initialize()
         {
             try
             {
-                // Đăng ký sự kiện Idle để chờ ComponentManager khởi tạo Ribbon xong
                 Application.Idle += OnApplicationIdle;
-                // Lắng nghe biến hệ thống thay đổi để render lại Ribbon khi chuyển Workspace
                 Application.SystemVariableChanged += OnSystemVariableChanged;
 
-                // Khởi tạo hệ thống markers
-                WallMarkers.Initialize();
+                foreach (string warning in WallSettingsService.Load())
+                {
+                    Debug.WriteLine("[Wall Joiner Settings] " + warning);
+                }
             }
             catch (System.Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("Lỗi khởi tạo Plugin: " + ex.Message);
+                Debug.WriteLine("[Wall Joiner Initialize]" + Environment.NewLine + ex);
             }
         }
 
@@ -34,205 +37,197 @@ namespace ProWallTools
             try
             {
                 Application.Idle -= OnApplicationIdle;
-                Application.SystemVariableChanged -= OnSystemVariableChanged;
-
-                // Dọn dẹp markers
-                WallMarkers.Terminate();
             }
-            catch
+            catch (System.Exception ex)
             {
-                // Bỏ qua lỗi trong quá trình Terminate
+                Debug.WriteLine("[Wall Joiner Terminate Idle]" + Environment.NewLine + ex);
+            }
+
+            try
+            {
+                Application.SystemVariableChanged -= OnSystemVariableChanged;
+            }
+            catch (System.Exception ex)
+            {
+                Debug.WriteLine("[Wall Joiner Terminate SystemVariableChanged]" + Environment.NewLine + ex);
             }
         }
 
         private void OnApplicationIdle(object sender, EventArgs e)
         {
-            // Hủy sự kiện ngay lập tức để chỉ chạy một lần lúc khởi động
-            Application.Idle -= OnApplicationIdle;
-            CreateRibbon();
+            try
+            {
+                if (EnsureRibbon())
+                {
+                    Application.Idle -= OnApplicationIdle;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.WriteLine("[Wall Joiner Ribbon Idle]" + Environment.NewLine + ex);
+            }
         }
 
         private void OnSystemVariableChanged(object sender, SystemVariableChangedEventArgs e)
         {
-            // Kiểm tra sự thay đổi của workspace
-            if (e.Name.Equals("WSCURRENT", StringComparison.OrdinalIgnoreCase))
+            try
             {
-                CreateRibbon();
+                if (string.Equals(e.Name, "WSCURRENT", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!EnsureRibbon())
+                    {
+                        Application.Idle -= OnApplicationIdle;
+                        Application.Idle += OnApplicationIdle;
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.WriteLine("[Wall Joiner Workspace Changed]" + Environment.NewLine + ex);
             }
         }
 
-        private void CreateRibbon()
+        private static bool EnsureRibbon()
         {
-            try
+            RibbonControl ribbon = ComponentManager.Ribbon;
+            if (ribbon == null) return false;
+
+            RibbonTab tab = ribbon.Tabs.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, WallConstants.RibbonTabId, StringComparison.OrdinalIgnoreCase));
+            if (tab == null)
             {
-                RibbonControl ribbon = ComponentManager.Ribbon;
-                if (ribbon == null) return;
+                tab = ribbon.Tabs.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Title, WallConstants.RibbonTabTitle, StringComparison.OrdinalIgnoreCase));
+            }
 
-                string tabTitle = "TH Tools";
-                string panelTitle = "Wall Joiner";
-                RibbonTab tab = null;
-
-                // Tìm xem tab "TH Tools" đã tồn tại chưa
-                foreach (RibbonTab t in ribbon.Tabs)
+            if (tab == null)
+            {
+                tab = new RibbonTab
                 {
-                    if (t.Title.Equals(tabTitle, StringComparison.OrdinalIgnoreCase))
-                    {
-                        tab = t;
-                        break;
-                    }
-                }
-
-                // Nếu chưa tồn tại, tạo mới
-                if (tab == null)
-                {
-                    tab = new RibbonTab
-                    {
-                        Title = tabTitle,
-                        Id = "TH_TOOLS_TAB"
-                    };
-                    ribbon.Tabs.Add(tab);
-                    // Bắt buộc gọi tab.IsActive = true ngay sau khi ribbon.Tabs.Add(tab) để ép Tab hiển thị
-                    tab.IsActive = true;
-                }
-                else
-                {
-                    tab.IsActive = true;
-                }
-
-                // Xóa panel cũ của Wall Joiner nếu đã tồn tại trong tab (khi chuyển Workspace vẽ lại)
-                RibbonPanel existingPanel = null;
-                foreach (RibbonPanel p in tab.Panels)
-                {
-                    if (p.Source != null && p.Source.Title.Equals(panelTitle, StringComparison.OrdinalIgnoreCase))
-                    {
-                        existingPanel = p;
-                        break;
-                    }
-                }
-                if (existingPanel != null)
-                {
-                    tab.Panels.Remove(existingPanel);
-                }
-
-                // Tạo Panel
-                RibbonPanelSource panelSource = new RibbonPanelSource
-                {
-                    Title = panelTitle
+                    Id = WallConstants.RibbonTabId,
+                    Title = WallConstants.RibbonTabTitle
                 };
-                RibbonPanel panel = new RibbonPanel
+                ribbon.Tabs.Add(tab);
+                tab.IsActive = true;
+            }
+
+            RibbonPanel panel = tab.Panels.FirstOrDefault(candidate =>
+                candidate.Source != null &&
+                string.Equals(candidate.Source.Id, WallConstants.RibbonPanelId, StringComparison.OrdinalIgnoreCase));
+            if (panel == null)
+            {
+                panel = tab.Panels.FirstOrDefault(candidate =>
+                    candidate.Source != null &&
+                    string.Equals(candidate.Source.Title, WallConstants.RibbonPanelTitle, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (panel == null)
+            {
+                panel = new RibbonPanel
                 {
-                    Source = panelSource
+                    Source = new RibbonPanelSource
+                    {
+                        Id = WallConstants.RibbonPanelId,
+                        Title = WallConstants.RibbonPanelTitle
+                    }
                 };
                 tab.Panels.Add(panel);
-
-                // Nút 1: Mở giao diện Cài đặt (WJ_UI)
-                RibbonButton btnUI = new RibbonButton
-                {
-                    Text = "Settings",
-                    ShowText = true,
-                    ShowImage = true,
-                    Size = RibbonItemSize.Large,
-                    Orientation = System.Windows.Controls.Orientation.Vertical,
-                    CommandHandler = new RibbonCommandHandler("WJ_UI"),
-                    LargeImage = LoadRibbonIcon("IconRibbon_Settings_32px.ico"),
-                    Image = LoadRibbonIcon("IconRibbon_Settings_32px.ico")
-                };
-
-                // Nút 2: Thực thi nhanh WJ
-                RibbonButton btnWJ = new RibbonButton
-                {
-                    Text = "Join Walls\n(WJ)",
-                    ShowText = true,
-                    ShowImage = true,
-                    Size = RibbonItemSize.Large,
-                    Orientation = System.Windows.Controls.Orientation.Vertical,
-                    CommandHandler = new RibbonCommandHandler("WJ"),
-                    LargeImage = LoadRibbonIcon("IconRibbon_Wall-Joiner_32px.ico"),
-                    Image = LoadRibbonIcon("IconRibbon_Wall-Joiner_32px.ico")
-                };
-
-                // Nút 3: Thực thi nhanh FW
-                RibbonButton btnFW = new RibbonButton
-                {
-                    Text = "Wall Finisher\n(FW)",
-                    ShowText = true,
-                    ShowImage = true,
-                    Size = RibbonItemSize.Large,
-                    Orientation = System.Windows.Controls.Orientation.Vertical,
-                    CommandHandler = new RibbonCommandHandler("FW"),
-                    LargeImage = LoadRibbonIcon("IconRibbon_Wall-Finisher_32px.ico"),
-                    Image = LoadRibbonIcon("IconRibbon_Wall-Finisher_32px.ico")
-                };
-
-                // Nút 4: Thực thi nhanh BW
-                RibbonButton btnBW = new RibbonButton
-                {
-                    Text = "Beautify\n(BW)",
-                    ShowText = true,
-                    ShowImage = true,
-                    Size = RibbonItemSize.Large,
-                    Orientation = System.Windows.Controls.Orientation.Vertical,
-                    CommandHandler = new RibbonCommandHandler("BW"),
-                    LargeImage = LoadRibbonIcon("IconRibbon_Beautify_32px.ico"),
-                    Image = LoadRibbonIcon("IconRibbon_Beautify_32px.ico")
-                };
-
-                panelSource.Items.Add(btnWJ);
-                panelSource.Items.Add(btnFW);
-                panelSource.Items.Add(btnBW);
-                panelSource.Items.Add(btnUI);
             }
-            catch (System.Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("Lỗi tạo Ribbon: " + ex.Message);
-            }
+
+            EnsureButton(
+                panel.Source,
+                WallConstants.RibbonWallJoinButtonId,
+                "Join Walls\n(WJ)",
+                WallConstants.WallJoinCommandName,
+                WallConstants.WallJoinIconResource);
+            EnsureButton(
+                panel.Source,
+                WallConstants.RibbonFinishButtonId,
+                "Wall Finisher\n(FW)",
+                WallConstants.FinishWallCommandName,
+                WallConstants.FinishIconResource);
+            EnsureButton(
+                panel.Source,
+                WallConstants.RibbonBeautifyButtonId,
+                "Beautify\n(BW)",
+                WallConstants.BeautifyCommandName,
+                WallConstants.BeautifyIconResource);
+            EnsureButton(
+                panel.Source,
+                WallConstants.RibbonSettingsButtonId,
+                "Settings",
+                WallConstants.SettingsCommandName,
+                WallConstants.SettingsIconResource);
+            return true;
         }
 
-        /// <summary>
-        /// Load icon từ file .ico trong thư mục Resource (cạnh DLL) bằng BitmapFrame.Create.
-        /// Giúp AutoCAD tự động chọn kích thước thích hợp (16x16 hoặc 32x32) mà không bị crop/mờ.
-        /// </summary>
-        private static System.Windows.Media.ImageSource LoadRibbonIcon(string iconFileName)
+        private static void EnsureButton(
+            RibbonPanelSource panelSource,
+            string buttonId,
+            string text,
+            string commandName,
+            string iconResource)
         {
-            try
+            RibbonButton button = panelSource.Items
+                .OfType<RibbonButton>()
+                .FirstOrDefault(candidate =>
+                    string.Equals(candidate.Id, buttonId, StringComparison.OrdinalIgnoreCase));
+            if (button == null)
             {
-                string assemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-                string iconPath = Path.Combine(assemblyDir, "Resource", iconFileName);
+                button = new RibbonButton { Id = buttonId };
+                panelSource.Items.Add(button);
+            }
 
-                if (File.Exists(iconPath))
-                {
-                    var uri = new Uri(iconPath, UriKind.Absolute);
-                    var icon = System.Windows.Media.Imaging.BitmapFrame.Create(
-                        uri, System.Windows.Media.Imaging.BitmapCreateOptions.None,
-                        System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
-                    return icon;
-                }
-            }
-            catch (System.Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("Lỗi load icon Ribbon: " + ex.Message);
-            }
-            return null;
+            ImageSource icon = LoadRibbonIcon(iconResource);
+            button.Text = text;
+            button.ShowText = true;
+            button.ShowImage = true;
+            button.Size = RibbonItemSize.Large;
+            button.Orientation = Orientation.Vertical;
+            button.CommandHandler = new RibbonCommandHandler(commandName);
+            button.LargeImage = icon;
+            button.Image = icon;
+        }
+
+        private static ImageSource LoadRibbonIcon(string resourceName)
+        {
+            var uri = new Uri(
+                "pack://application:,,,/WallJoinerSuper;component/Resources/" + resourceName,
+                UriKind.Absolute);
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.UriSource = uri;
+            image.EndInit();
+            image.Freeze();
+            return image;
         }
     }
 
-    public class RibbonCommandHandler : System.Windows.Input.ICommand
+    public sealed class RibbonCommandHandler : System.Windows.Input.ICommand
     {
-        private readonly string _command;
+        private readonly string commandName;
 
-        public RibbonCommandHandler(string command)
+        public RibbonCommandHandler(string commandName)
         {
-            _command = command;
+            this.commandName = commandName ?? throw new ArgumentNullException(nameof(commandName));
         }
 
         public bool CanExecute(object parameter) => true;
 
         public void Execute(object parameter)
         {
-            Document doc = Application.DocumentManager.MdiActiveDocument;
-            if (doc != null)
+            try
             {
-                doc.SendStringToExecute(_command + " ", true, false, false);
+                Document document = Application.DocumentManager.MdiActiveDocument;
+                if (document == null) return;
+
+                // Ribbon ICommand cannot invoke an AutoCAD CommandMethod through the managed API.
+                document.SendStringToExecute(commandName + " ", true, false, false);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.WriteLine($"[Wall Joiner Ribbon Command: {commandName}]{Environment.NewLine}{ex}");
             }
         }
 

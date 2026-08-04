@@ -8,47 +8,30 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AssemblyTitle>Wall Joiner Super</AssemblyTitle>
     <Product>Wall Joiner Super</Product>
-    <Version>1.0.0</Version>
-    <FileVersion>1.0.0</FileVersion>
-    <Platforms>AnyCPU;x64</Platforms>
+    <Version>1.1.0</Version>
+    <FileVersion>1.1.0</FileVersion>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>bin\$(Configuration)\</OutputPath>
     <LangVersion>7.3</LangVersion>
+    <DeployPlugin Condition="'$(DeployPlugin)'==''">false</DeployPlugin>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
     <Optimize>true</Optimize>
     <DebugType>pdbonly</DebugType>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <PlatformTarget>x64</PlatformTarget>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <Optimize>true</Optimize>
-    <DebugType>pdbonly</DebugType>
-    <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- AutoCAD APIs references via NuGet package (runtime exclusion is mandatory) -->
     <PackageReference Include="AutoCAD.NET" Version="23.1.0" ExcludeAssets="runtime" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <!-- Reference local AdWindows.dll from AutoCAD 2021 installation for Ribbon API -->
-    <Reference Include="AdWindows">
-      <HintPath>C:\Program Files\Autodesk\AutoCAD 2021\AdWindows.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -59,27 +42,40 @@
     <Resource Include="Resources\IconRibbon_Beautify_32px.png" />
   </ItemGroup>
 
-  <!-- Automation Build Target to copy build bundle to Autodesk Plugins folder -->
-  <Target Name="CopyToPlugins" AfterTargets="Build">
+  <Target Name="PackagePlugin" AfterTargets="Build">
     <PropertyGroup>
-      <PluginDir>$(APPDATA)\Autodesk\ApplicationPlugins\WallJoinerSuper.bundle</PluginDir>
-      <ContentsDir>$(PluginDir)\Contents</ContentsDir>
+      <BundleDir>$(TargetDir)WallJoinerSuper.bundle</BundleDir>
+      <ContentsDir>$(BundleDir)\Contents</ContentsDir>
     </PropertyGroup>
-    
-    <Message Text="[AutoBuild] Deploying plugin to: $(PluginDir)" Importance="high" />
+
+    <Message Text="[Package] Creating plugin bundle: $(BundleDir)" Importance="high" />
+    <RemoveDir Directories="$(BundleDir)" Condition="Exists('$(BundleDir)')" />
     <MakeDir Directories="$(ContentsDir)" />
-    
-    <!-- Copy PackageContents.xml from project root to bundle folder -->
-    <Copy SourceFiles="$(ProjectDir)PackageContents.xml" DestinationFolder="$(PluginDir)" SkipUnchangedFiles="true" />
-    
-    <!-- Copy compiled binaries to Contents folder -->
+    <MakeDir Directories="$(ContentsDir)\Resource" />
+    <Copy SourceFiles="$(ProjectDir)PackageContents.xml" DestinationFolder="$(BundleDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(ContentsDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).pdb" DestinationFolder="$(ContentsDir)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)$(AssemblyName).pdb')" />
-    
-    <!-- Copy ribbon icons (.ico) to Resource folder inside bundle -->
+
     <ItemGroup>
       <IconFiles Include="$(ProjectDir)Resources\*.ico" />
     </ItemGroup>
     <Copy SourceFiles="@(IconFiles)" DestinationFolder="$(ContentsDir)\Resource" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="DeployPluginBundle" AfterTargets="PackagePlugin" Condition="'$(DeployPlugin)'=='true'">
+    <PropertyGroup>
+      <PluginDir>$(APPDATA)\Autodesk\ApplicationPlugins\WallJoinerSuper.bundle</PluginDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <BundleFiles Include="$(BundleDir)\**\*" />
+    </ItemGroup>
+    <Error Condition="'$(APPDATA)'==''" Text="APPDATA is required to deploy WallJoinerSuper.bundle safely." />
+    <Message Text="[Deploy] Copying plugin to: $(PluginDir)" Importance="high" />
+    <RemoveDir Directories="$(PluginDir)" Condition="Exists('$(PluginDir)')" />
+    <MakeDir Directories="$(PluginDir)" />
+    <Copy
+      SourceFiles="@(BundleFiles)"
+      DestinationFiles="@(BundleFiles->'$(PluginDir)\%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
   </Target>
 </Project>
