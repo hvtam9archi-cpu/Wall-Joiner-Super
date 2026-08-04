@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ApplicationPackage 
     SchemaVersion="1.0" 
-    AppVersion="1.0.0" 
-    Author="Antigravity" 
+    AppVersion="1.1.0"
+    Author="TH Tools"
     ProductCode="{92DF9B1C-7BBD-4823-8296-568DAEC93678}" 
     Name="Wall Joiner Super" 
     Description="AutoCAD Wall Joiner Super Plugin"
-    Icon="./Contents/icon.ico">
-  <CompanyDetails Name="Antigravity" />
+    Icon="./Contents/Resource/IconRibbon_Wall-Joiner_32px.ico">
+  <CompanyDetails Name="TH Tools" />
   <Components>
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD" MinVersion="2018" />
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R23.1" />
     <ComponentEntry 
         AppName="Wall Joiner Super" 
         ModuleName="./Contents/WallJoinerSuper.dll" 

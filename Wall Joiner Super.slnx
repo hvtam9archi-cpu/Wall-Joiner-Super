@@ -1,9 +1,11 @@
 <Solution>
   <Configurations>
-    <Platform Name="Any CPU" />
     <Platform Name="x64" />
   </Configurations>
   <Project Path="Wall Joiner Super/Wall Joiner Super.csproj" Id="92df9b1c-7bbd-4823-8296-568daec93678">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+  <Project Path="Wall Joiner Super.Tests/Wall Joiner Super.Tests.csproj" Id="67b2fc0a-a6cc-40ae-99cd-cf0d203f2924">
     <Platform Solution="*|x64" Project="x64" />
   </Project>
 </Solution>

@@ -4,20 +4,29 @@ namespace ProWallTools
 {
     public static class WallConstants
     {
-        // Dung sai hình học
-        public static double GapTolerance = 10.0;
-        public static double VertexTolerance = 1e-4;
-        public static double DefaultOffset = 15.0;
+        public const string BeautifyCommandName = "BW";
+        public const string WallJoinCommandName = "WJ";
+        public const string FinishWallCommandName = "FW";
+        public const string SettingsCommandName = "WJ_UI";
 
-        // Cấu hình Layer mặc định
-        public static string CurrentWallLayer = "ABC_A_Nettuong";
-        public static string CurrentFinishLayer = "ABC_A_Netmanh";
+        public const string RibbonTabId = "TH_TOOLS_TAB";
+        public const string RibbonTabTitle = "TH Tools";
+        public const string RibbonPanelId = "TH_TOOLS_WALL_JOINER_PANEL";
+        public const string RibbonPanelTitle = "Wall Joiner";
+        public const string RibbonWallJoinButtonId = "TH_TOOLS_WJ_BUTTON";
+        public const string RibbonFinishButtonId = "TH_TOOLS_FW_BUTTON";
+        public const string RibbonBeautifyButtonId = "TH_TOOLS_BW_BUTTON";
+        public const string RibbonSettingsButtonId = "TH_TOOLS_WJ_SETTINGS_BUTTON";
 
-        // Định dạng màu sắc và nét vẽ
+        public const string SettingsIconResource = "IconRibbon_Settings_32px.png";
+        public const string WallJoinIconResource = "IconRibbon_Wall-Joiner_32px.png";
+        public const string FinishIconResource = "IconRibbon_Wall-Finisher_32px.png";
+        public const string BeautifyIconResource = "IconRibbon_Beautify_32px.png";
+
         public const short WallColor = 4; // Cyan
         public static readonly LineWeight WallWeight = LineWeight.LineWeight025;
 
-        public const short FinishColor = 9; // Màu số 9
+        public const short FinishColor = 9;
         public static readonly LineWeight FinishWeight = LineWeight.LineWeight009;
     }
 }
