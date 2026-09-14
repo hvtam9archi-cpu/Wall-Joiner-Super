@@ -48,8 +48,10 @@ tại không copy Lisp trực tiếp; các ý tưởng trên được viết l�
 
 - `Strict Mode` mặc định bật: nếu một đầu vào/cụm không xử lý được thì transaction
   không commit.
-- `Keep originals` mặc định tắt cho `WJ`.
-- Khi tắt `Keep originals`, block chỉ bị xóa nếu toàn bộ nội dung đã được trích xuất
+- `Keep originals` mặc định tắt cho `WJ` khi `Strict Mode` bật.
+- Khi `Strict Mode` tắt, plugin luôn giữ originals dù cấu hình cũ từng lưu `Keep originals = false`;
+  điều này ngăn partial-processing xóa source của cụm thành công trong khi cụm khác thất bại.
+- Khi được phép xóa originals, block chỉ bị xóa nếu toàn bộ nội dung đã được trích xuất
   thành curve hỗ trợ. Block chứa text hoặc entity khác luôn được giữ lại và có cảnh báo.
 - Region được thử trên geometry đã clean trước. Bridge chỉ được xét sau khi Region không
   cho kết quả và chỉ nối dangling endpoints trong `Gap Tolerance`.
@@ -132,6 +134,7 @@ dotnet run --project "Wall Joiner Super.Tests/Wall Joiner Super.Tests.csproj" -c
 Bộ kiểm tra hiện bao phủ:
 
 - numeric/settings và JSON round-trip;
+- non-strict mode bắt buộc giữ source entities;
 - clean duplicate vertex, giữ bulge và width, tính idempotent;
 - stitch loop khi segment bị đảo chiều và đảo dấu bulge;
 - từ chối T-junction mơ hồ;
@@ -155,8 +158,7 @@ Trước khi phát hành vẫn nên chạy bộ DWG hồi quy trong AutoCAD vớ
 
 - `Commands.cs`: entry point và điều phối prompt/UI.
 - `WallInteraction.cs`: selection filter và chuẩn hóa kết quả OK/Cancel/Error.
-- `WallJoinWorkflow.cs`: workflow đang được command sử dụng; snapshot, Strict Mode và ghi atomic.
-- `WallJoinLogic.cs`: implementation refactor trước đó được giữ tạm để đối chiếu/regression.
+- `WallJoinWorkflow.cs`: workflow duy nhất cho WJ/FW/BW; snapshot, Strict Mode và ghi atomic.
 - `GeometryPipeline.cs`: clean -> Region -> F# topology -> safe bridge -> fallback.
 - `GeometryKernelAdapter.cs`: chuyển AutoCAD Curve/Polyline sang DTO F# và ngược lại.
 - `Wall Joiner Geometry/GeometryTypes.fs`: DTO immutable-friendly cho interop C#/F#.
