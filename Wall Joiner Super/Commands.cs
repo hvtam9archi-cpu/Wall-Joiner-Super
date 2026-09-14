@@ -70,7 +70,14 @@ namespace ProWallTools
                     "LINE,LWPOLYLINE,POLYLINE,INSERT");
                 if (!CanContinue(selection, document)) return;
 
-                WallJoinWorkflow.ExecuteWallJoin(document, selection.ObjectIds, isFinishing);
+                if (isFinishing)
+                {
+                    WallJoinWorkflow.ExecuteWallJoin(document, selection.ObjectIds, isFinishing: true);
+                }
+                else
+                {
+                    WallJoinSourcePolicy.ExecuteReplacingSources(document, selection.ObjectIds);
+                }
             });
         }
 
