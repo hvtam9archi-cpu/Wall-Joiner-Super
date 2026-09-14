@@ -35,6 +35,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Wall Joiner Geometry\Wall Joiner Geometry.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Ảnh nhúng vào Assembly dưới dạng WPF Resource (Pack URI: pack://application:,,,/WallJoinerSuper;component/Resources/xxx.png) -->
     <Resource Include="Resources\IconRibbon_Settings_32px.png" />
     <Resource Include="Resources\IconRibbon_Wall-Joiner_32px.png" />
@@ -57,8 +61,13 @@
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).pdb" DestinationFolder="$(ContentsDir)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)$(AssemblyName).pdb')" />
 
     <ItemGroup>
+      <PluginDependency Include="$(TargetDir)WallJoiner.Geometry.dll" Condition="Exists('$(TargetDir)WallJoiner.Geometry.dll')" />
+      <PluginDependency Include="$(TargetDir)FSharp.Core.dll" Condition="Exists('$(TargetDir)FSharp.Core.dll')" />
       <IconFiles Include="$(ProjectDir)Resources\*.ico" />
     </ItemGroup>
+    <Error Condition="!Exists('$(TargetDir)WallJoiner.Geometry.dll')" Text="WallJoiner.Geometry.dll was not produced; the F# geometry project must build successfully." />
+    <Error Condition="!Exists('$(TargetDir)FSharp.Core.dll')" Text="FSharp.Core.dll was not copied to the plugin output; AutoCAD requires it at runtime." />
+    <Copy SourceFiles="@(PluginDependency)" DestinationFolder="$(ContentsDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(IconFiles)" DestinationFolder="$(ContentsDir)\Resource" SkipUnchangedFiles="true" />
   </Target>
 
