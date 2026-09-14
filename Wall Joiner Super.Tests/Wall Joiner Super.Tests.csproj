@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Wall Joiner Geometry\Wall Joiner Geometry.fsproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Include="..\Wall Joiner Super\NumericGeometry.cs" Link="NumericGeometry.cs" />
     <Compile Include="..\Wall Joiner Super\WallSettings.cs" Link="WallSettings.cs" />
   </ItemGroup>
