@@ -63,6 +63,37 @@ namespace ProWallTools
             return result;
         }
 
+        public static bool TryStitchExactLoops(
+            IReadOnlyList<Curve> curves,
+            double vertexTolerance,
+            Action<string> logger,
+            out List<Polyline> polylines)
+        {
+            polylines = new List<Polyline>();
+            if (!TryToExactSegments(curves, out SegmentDto[] segments) || segments.Length == 0)
+            {
+                return false;
+            }
+
+            LoopDto[] loops = GeometryKernel.StitchClosedLoops(segments, vertexTolerance);
+            int stitchedSegmentCount = loops.Sum(loop => loop?.Segments?.Length ?? 0);
+            if (loops.Length == 0 || stitchedSegmentCount != segments.Length)
+            {
+                return false;
+            }
+
+            polylines = BuildPolylinesFromLoops(
+                loops,
+                vertexTolerance,
+                logger,
+                simplify: false);
+            if (polylines.Count == loops.Length) return true;
+
+            DisposePolylines(polylines);
+            polylines = new List<Polyline>();
+            return false;
+        }
+
         public static List<Polyline> StitchClosedLoops(
             IEnumerable<Curve> curves,
             double vertexTolerance,
@@ -72,17 +103,30 @@ namespace ProWallTools
             if (segments.Length == 0) return new List<Polyline>();
 
             LoopDto[] loops = GeometryKernel.StitchClosedLoops(segments, vertexTolerance);
-            var result = new List<Polyline>(loops.Length);
-            foreach (LoopDto loop in loops)
+            return BuildPolylinesFromLoops(
+                loops,
+                vertexTolerance,
+                logger,
+                simplify: true);
+        }
+
+        private static List<Polyline> BuildPolylinesFromLoops(
+            IEnumerable<LoopDto> loops,
+            double vertexTolerance,
+            Action<string> logger,
+            bool simplify)
+        {
+            var result = new List<Polyline>();
+            foreach (LoopDto loop in loops ?? Enumerable.Empty<LoopDto>())
             {
                 if (loop?.Segments == null || loop.Segments.Length < 2) continue;
 
-                SegmentDto[] simplifiedSegments = GeometrySimplifier.SimplifyLoopSegments(
-                    loop.Segments,
-                    vertexTolerance);
-                if (simplifiedSegments.Length < 2) continue;
+                SegmentDto[] outputSegments = simplify
+                    ? GeometrySimplifier.SimplifyLoopSegments(loop.Segments, vertexTolerance)
+                    : loop.Segments;
+                if (outputSegments.Length < 2) continue;
 
-                var polyline = new Polyline(simplifiedSegments.Length)
+                var polyline = new Polyline(outputSegments.Length)
                 {
                     Normal = Vector3d.ZAxis,
                     Elevation = 0,
@@ -91,9 +135,9 @@ namespace ProWallTools
 
                 try
                 {
-                    for (int i = 0; i < simplifiedSegments.Length; i++)
+                    for (int i = 0; i < outputSegments.Length; i++)
                     {
-                        SegmentDto segment = simplifiedSegments[i];
+                        SegmentDto segment = outputSegments[i];
                         polyline.AddVertexAt(
                             i,
                             new Point2d(segment.StartX, segment.StartY),
@@ -105,11 +149,6 @@ namespace ProWallTools
                     if (polyline.NumberOfVertices >= 2 &&
                         Math.Abs(polyline.Area) > vertexTolerance * vertexTolerance)
                     {
-                        if (simplifiedSegments.Length < loop.Segments.Length)
-                        {
-                            logger?.Invoke(
-                                $"Đã rút gọn boundary từ {loop.Segments.Length} xuống {simplifiedSegments.Length} vertex/segment cần thiết.");
-                        }
                         result.Add(polyline);
                     }
                     else
@@ -195,6 +234,57 @@ namespace ProWallTools
             return true;
         }
 
+        private static bool TryToExactSegments(
+            IEnumerable<Curve> sourceCurves,
+            out SegmentDto[] segments)
+        {
+            var result = new List<SegmentDto>();
+            int sourceIndex = 0;
+
+            foreach (Curve curve in sourceCurves ?? Enumerable.Empty<Curve>())
+            {
+                if (curve == null)
+                {
+                    sourceIndex++;
+                    continue;
+                }
+
+                if (curve is Polyline polyline)
+                {
+                    AddPolylineSegments(polyline, sourceIndex, result);
+                    sourceIndex++;
+                    continue;
+                }
+
+                if (curve is Line line)
+                {
+                    AddLineSegment(line, sourceIndex, result);
+                    sourceIndex++;
+                    continue;
+                }
+
+                if (curve is Arc arc)
+                {
+                    AddArcSegment(arc, sourceIndex, result);
+                    sourceIndex++;
+                    continue;
+                }
+
+                if (curve is Circle circle)
+                {
+                    AddCircleSegments(circle, sourceIndex, result);
+                    sourceIndex++;
+                    continue;
+                }
+
+                segments = Array.Empty<SegmentDto>();
+                return false;
+            }
+
+            segments = result.ToArray();
+            return true;
+        }
+
         private static IEnumerable<SegmentDto> ToSegments(IEnumerable<Curve> sourceCurves)
         {
             int sourceIndex = 0;
@@ -206,30 +296,28 @@ namespace ProWallTools
                     continue;
                 }
 
+                var exact = new List<SegmentDto>();
                 if (curve is Polyline polyline)
                 {
-                    int segmentCount = polyline.Closed
-                        ? polyline.NumberOfVertices
-                        : Math.Max(0, polyline.NumberOfVertices - 1);
-                    for (int i = 0; i < segmentCount; i++)
-                    {
-                        int next = (i + 1) % polyline.NumberOfVertices;
-                        Point3d start = polyline.GetPoint3dAt(i);
-                        Point3d end = polyline.GetPoint3dAt(next);
-                        if (start.DistanceTo(end) > 1e-9 || Math.Abs(polyline.GetBulgeAt(i)) > 1e-12)
-                        {
-                            yield return CreateSegment(start, end, polyline.GetBulgeAt(i), sourceIndex);
-                        }
-                    }
-                    sourceIndex++;
-                    continue;
+                    AddPolylineSegments(polyline, sourceIndex, exact);
+                }
+                else if (curve is Line line)
+                {
+                    AddLineSegment(line, sourceIndex, exact);
+                }
+                else if (curve is Arc arc)
+                {
+                    AddArcSegment(arc, sourceIndex, exact);
+                }
+                else if (curve is Circle circle)
+                {
+                    AddCircleSegments(circle, sourceIndex, exact);
                 }
 
-                if (curve is Arc arc)
+                if (exact.Count > 0)
                 {
-                    double bulge = Math.Tan(arc.TotalAngle / 4.0);
-                    if (arc.Normal.Z < 0) bulge = -bulge;
-                    yield return CreateSegment(arc.StartPoint, arc.EndPoint, bulge, sourceIndex++);
+                    foreach (SegmentDto segment in exact) yield return segment;
+                    sourceIndex++;
                     continue;
                 }
 
@@ -245,6 +333,64 @@ namespace ProWallTools
                 }
                 sourceIndex++;
             }
+        }
+
+        private static void AddPolylineSegments(
+            Polyline polyline,
+            int sourceIndex,
+            ICollection<SegmentDto> target)
+        {
+            int segmentCount = polyline.Closed
+                ? polyline.NumberOfVertices
+                : Math.Max(0, polyline.NumberOfVertices - 1);
+            for (int i = 0; i < segmentCount; i++)
+            {
+                int next = (i + 1) % polyline.NumberOfVertices;
+                Point3d start = polyline.GetPoint3dAt(i);
+                Point3d end = polyline.GetPoint3dAt(next);
+                double bulge = polyline.GetBulgeAt(i);
+                if (start.DistanceTo(end) > 1e-9 || Math.Abs(bulge) > 1e-12)
+                {
+                    target.Add(CreateSegment(start, end, bulge, sourceIndex));
+                }
+            }
+        }
+
+        private static void AddLineSegment(
+            Line line,
+            int sourceIndex,
+            ICollection<SegmentDto> target)
+        {
+            if (line.StartPoint.DistanceTo(line.EndPoint) > 1e-9)
+            {
+                target.Add(CreateSegment(line.StartPoint, line.EndPoint, 0, sourceIndex));
+            }
+        }
+
+        private static void AddArcSegment(
+            Arc arc,
+            int sourceIndex,
+            ICollection<SegmentDto> target)
+        {
+            double bulge = Math.Tan(arc.TotalAngle / 4.0);
+            if (arc.Normal.Z < 0) bulge = -bulge;
+            target.Add(CreateSegment(arc.StartPoint, arc.EndPoint, bulge, sourceIndex));
+        }
+
+        private static void AddCircleSegments(
+            Circle circle,
+            int sourceIndex,
+            ICollection<SegmentDto> target)
+        {
+            if (circle.Radius <= 1e-9) return;
+
+            Point3d center = circle.Center;
+            Point3d right = new Point3d(center.X + circle.Radius, center.Y, 0);
+            Point3d left = new Point3d(center.X - circle.Radius, center.Y, 0);
+            double bulge = circle.Normal.Z < 0 ? -1.0 : 1.0;
+
+            target.Add(CreateSegment(right, left, bulge, sourceIndex));
+            target.Add(CreateSegment(left, right, bulge, sourceIndex));
         }
 
         private static SegmentDto CreateSegment(
@@ -282,6 +428,13 @@ namespace ProWallTools
                 yield break;
             }
 
+            if (entity is Circle circle)
+            {
+                yield return new Point3d(circle.Center.X + circle.Radius, circle.Center.Y, 0);
+                yield return new Point3d(circle.Center.X - circle.Radius, circle.Center.Y, 0);
+                yield break;
+            }
+
             if (entity is Curve curve)
             {
                 foreach (Point3d point in GetCurveVertices(curve)) yield return point;
@@ -310,6 +463,15 @@ namespace ProWallTools
             {
                 yield return arc.StartPoint;
                 yield return arc.EndPoint;
+                yield break;
+            }
+
+            if (curve is Circle circle)
+            {
+                yield return new Point3d(circle.Center.X + circle.Radius, circle.Center.Y, 0);
+                yield return new Point3d(circle.Center.X - circle.Radius, circle.Center.Y, 0);
+                yield return new Point3d(circle.Center.X, circle.Center.Y + circle.Radius, 0);
+                yield return new Point3d(circle.Center.X, circle.Center.Y - circle.Radius, 0);
                 yield break;
             }
 
@@ -360,6 +522,14 @@ namespace ProWallTools
             }
 
             return points;
+        }
+
+        private static void DisposePolylines(IEnumerable<Polyline> polylines)
+        {
+            foreach (Polyline polyline in polylines ?? Enumerable.Empty<Polyline>())
+            {
+                if (polyline != null && !polyline.IsDisposed) polyline.Dispose();
+            }
         }
 
         private static PointDto ToPointDto(Point3d point)
