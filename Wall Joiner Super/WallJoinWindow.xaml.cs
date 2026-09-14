@@ -22,6 +22,9 @@ namespace ProWallTools
             if (layerNames == null) throw new ArgumentNullException(nameof(layerNames));
             if (settings == null) throw new ArgumentNullException(nameof(settings));
 
+            // WJ now always replaces source geometry with the joined result.
+            chkKeepOriginals.Visibility = Visibility.Collapsed;
+
             cmbWallLayer.ItemsSource = layerNames;
             cmbFinishLayer.ItemsSource = layerNames;
             cmbOffsetMode.ItemsSource = Enum.GetValues(typeof(FinishOffsetMode));
@@ -41,7 +44,7 @@ namespace ProWallTools
             cmbWallLayer.Text = settings.WallLayer;
             cmbFinishLayer.Text = settings.FinishLayer;
             cmbOffsetMode.SelectedItem = settings.FinishOffsetMode;
-            chkKeepOriginals.IsChecked = settings.KeepOriginals;
+            chkKeepOriginals.IsChecked = false;
             chkStrictMode.IsChecked = settings.StrictMode;
         }
 
@@ -86,7 +89,7 @@ namespace ProWallTools
                 FinishOffsetMode = cmbOffsetMode.SelectedItem is FinishOffsetMode mode
                     ? mode
                     : FinishOffsetMode.Outside,
-                KeepOriginals = chkKeepOriginals.IsChecked == true,
+                KeepOriginals = false,
                 StrictMode = chkStrictMode.IsChecked == true
             };
 
