@@ -21,7 +21,7 @@ namespace ProWallTools
                     "LINE,LWPOLYLINE");
                 if (!CanContinue(selection, document)) return;
 
-                WallJoinLogic.ExecuteBeautifyWalls(document, selection.ObjectIds);
+                WallJoinWorkflow.ExecuteBeautifyWalls(document, selection.ObjectIds);
             });
         }
 
@@ -70,7 +70,7 @@ namespace ProWallTools
                     "LINE,LWPOLYLINE,POLYLINE,INSERT");
                 if (!CanContinue(selection, document)) return;
 
-                WallJoinLogic.ExecuteWallJoin(document, selection.ObjectIds, isFinishing);
+                WallJoinWorkflow.ExecuteWallJoin(document, selection.ObjectIds, isFinishing);
             });
         }
 
