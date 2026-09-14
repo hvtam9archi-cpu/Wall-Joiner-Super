@@ -2,6 +2,9 @@
   <Configurations>
     <Platform Name="x64" />
   </Configurations>
+  <Project Path="Wall Joiner Geometry/Wall Joiner Geometry.fsproj" Id="c4e1ea48-0ef9-4638-a2e1-2b0db47802a8">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
   <Project Path="Wall Joiner Super/Wall Joiner Super.csproj" Id="92df9b1c-7bbd-4823-8296-568daec93678">
     <Platform Solution="*|x64" Project="x64" />
   </Project>
