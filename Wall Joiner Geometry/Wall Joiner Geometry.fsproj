@@ -10,5 +10,6 @@
   <ItemGroup>
     <Compile Include="GeometryTypes.fs" />
     <Compile Include="GeometryKernel.fs" />
+    <Compile Include="LoopSimplifier.fs" />
   </ItemGroup>
 </Project>
