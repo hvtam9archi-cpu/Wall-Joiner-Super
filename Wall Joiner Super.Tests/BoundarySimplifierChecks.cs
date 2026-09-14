@@ -56,6 +56,25 @@ namespace ProWallTools.Tests
             {
                 throw new InvalidOperationException("Boundary simplification must preserve arc bulge segments.");
             }
+
+            SegmentDto[] exactCircle =
+            {
+                Segment(10, 0, -10, 0, 0, 1.0),
+                Segment(-10, 0, 10, 0, 0, 1.0)
+            };
+
+            LoopDto[] circleLoops = GeometryKernel.StitchClosedLoops(exactCircle, 1e-6);
+            if (circleLoops.Length != 1 || circleLoops[0].Segments.Length != 2)
+            {
+                throw new InvalidOperationException(
+                    "A circle represented by two exact semicircle bulges must remain a 2-segment closed loop.");
+            }
+
+            if (Math.Abs(circleLoops[0].Segments[0].Bulge) < 0.999999 ||
+                Math.Abs(circleLoops[0].Segments[1].Bulge) < 0.999999)
+            {
+                throw new InvalidOperationException("Exact circle topology must preserve semicircle bulges.");
+            }
         }
 
         private static SegmentDto Segment(
