@@ -38,7 +38,7 @@ namespace ProWallTools
                 vertices,
                 source.Closed,
                 CleanPolylineTolerance);
-            if (cleaned.Length < (source.Closed ? 2 : 2))
+            if (cleaned.Length < 2)
             {
                 logger?.Invoke("LWPOLYLINE không còn đủ đỉnh hợp lệ sau khi loại đỉnh trùng.");
                 return null;
@@ -76,7 +76,13 @@ namespace ProWallTools
             foreach (LoopDto loop in loops)
             {
                 if (loop?.Segments == null || loop.Segments.Length < 2) continue;
-                var polyline = new Polyline(loop.Segments.Length)
+
+                SegmentDto[] simplifiedSegments = GeometrySimplifier.SimplifyLoopSegments(
+                    loop.Segments,
+                    vertexTolerance);
+                if (simplifiedSegments.Length < 2) continue;
+
+                var polyline = new Polyline(simplifiedSegments.Length)
                 {
                     Normal = Vector3d.ZAxis,
                     Elevation = 0,
@@ -85,9 +91,9 @@ namespace ProWallTools
 
                 try
                 {
-                    for (int i = 0; i < loop.Segments.Length; i++)
+                    for (int i = 0; i < simplifiedSegments.Length; i++)
                     {
-                        SegmentDto segment = loop.Segments[i];
+                        SegmentDto segment = simplifiedSegments[i];
                         polyline.AddVertexAt(
                             i,
                             new Point2d(segment.StartX, segment.StartY),
@@ -99,6 +105,11 @@ namespace ProWallTools
                     if (polyline.NumberOfVertices >= 2 &&
                         Math.Abs(polyline.Area) > vertexTolerance * vertexTolerance)
                     {
+                        if (simplifiedSegments.Length < loop.Segments.Length)
+                        {
+                            logger?.Invoke(
+                                $"Đã rút gọn boundary từ {loop.Segments.Length} xuống {simplifiedSegments.Length} vertex/segment cần thiết.");
+                        }
                         result.Add(polyline);
                     }
                     else
