@@ -10,6 +10,8 @@ namespace ProWallTools
     internal static class GeometryKernelAdapter
     {
         private const double CleanPolylineTolerance = 1e-9;
+        private const int GenericCurveSegments = 24;
+        private const int SnapCurveSamples = 8;
 
         public static Polyline NormalizeAndCleanPolyline(
             Polyline source,
@@ -36,7 +38,7 @@ namespace ProWallTools
                 vertices,
                 source.Closed,
                 CleanPolylineTolerance);
-            if (cleaned.Length < (source.Closed ? 3 : 2))
+            if (cleaned.Length < (source.Closed ? 2 : 2))
             {
                 logger?.Invoke("LWPOLYLINE không còn đủ đỉnh hợp lệ sau khi loại đỉnh trùng.");
                 return null;
@@ -94,7 +96,7 @@ namespace ProWallTools
                             0);
                     }
 
-                    if (polyline.NumberOfVertices >= 3 &&
+                    if (polyline.NumberOfVertices >= 2 &&
                         Math.Abs(polyline.Area) > vertexTolerance * vertexTolerance)
                     {
                         result.Add(polyline);
@@ -203,7 +205,10 @@ namespace ProWallTools
                         int next = (i + 1) % polyline.NumberOfVertices;
                         Point3d start = polyline.GetPoint3dAt(i);
                         Point3d end = polyline.GetPoint3dAt(next);
-                        yield return CreateSegment(start, end, polyline.GetBulgeAt(i), sourceIndex);
+                        if (start.DistanceTo(end) > 1e-9 || Math.Abs(polyline.GetBulgeAt(i)) > 1e-12)
+                        {
+                            yield return CreateSegment(start, end, polyline.GetBulgeAt(i), sourceIndex);
+                        }
                     }
                     sourceIndex++;
                     continue;
@@ -217,19 +222,17 @@ namespace ProWallTools
                     continue;
                 }
 
-                try
+                IReadOnlyList<Point3d> samples = SampleCurvePoints(curve, GenericCurveSegments);
+                for (int i = 1; i < samples.Count; i++)
                 {
-                    Point3d start = curve.StartPoint;
-                    Point3d end = curve.EndPoint;
+                    Point3d start = samples[i - 1];
+                    Point3d end = samples[i];
                     if (start.DistanceTo(end) > 1e-9)
                     {
                         yield return CreateSegment(start, end, 0, sourceIndex);
                     }
                 }
-                finally
-                {
-                    sourceIndex++;
-                }
+                sourceIndex++;
             }
         }
 
@@ -285,11 +288,67 @@ namespace ProWallTools
                 yield break;
             }
 
-            yield return curve.StartPoint;
-            if (curve.EndPoint.DistanceTo(curve.StartPoint) > 1e-9)
+            if (curve is Line line)
             {
-                yield return curve.EndPoint;
+                yield return line.StartPoint;
+                yield return line.EndPoint;
+                yield break;
             }
+
+            if (curve is Arc arc)
+            {
+                yield return arc.StartPoint;
+                yield return arc.EndPoint;
+                yield break;
+            }
+
+            foreach (Point3d point in SampleCurvePoints(curve, SnapCurveSamples))
+            {
+                yield return point;
+            }
+        }
+
+        private static IReadOnlyList<Point3d> SampleCurvePoints(Curve curve, int segmentCount)
+        {
+            var points = new List<Point3d>();
+            try
+            {
+                double startParameter = curve.StartParam;
+                double endParameter = curve.EndParam;
+                double range = endParameter - startParameter;
+                if (Math.Abs(range) > 1e-12)
+                {
+                    for (int i = 0; i <= segmentCount; i++)
+                    {
+                        double parameter = startParameter + range * i / segmentCount;
+                        Point3d point = curve.GetPointAtParameter(parameter);
+                        if (points.Count == 0 || points[points.Count - 1].DistanceTo(point) > 1e-9)
+                        {
+                            points.Add(point);
+                        }
+                    }
+                }
+            }
+            catch (System.Exception)
+            {
+                points.Clear();
+            }
+
+            if (points.Count == 0)
+            {
+                try
+                {
+                    points.Add(curve.StartPoint);
+                    Point3d end = curve.EndPoint;
+                    if (points[0].DistanceTo(end) > 1e-9) points.Add(end);
+                }
+                catch (System.Exception)
+                {
+                    // Caller treats an empty sample set as unsupported geometry.
+                }
+            }
+
+            return points;
         }
 
         private static PointDto ToPointDto(Point3d point)
