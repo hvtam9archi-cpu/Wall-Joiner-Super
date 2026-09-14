@@ -202,9 +202,9 @@ namespace ProWallTools
 
                 if (curve is Polyline sourcePolyline)
                 {
-                    if (!IsPositiveWorldZ(sourcePolyline.Normal))
+                    if (!TryGetWorldZDirection(sourcePolyline.Normal, out bool reverseBulges))
                     {
-                        logger?.Invoke("Bỏ qua LWPOLYLINE có normal không cùng hướng WCS Z.");
+                        logger?.Invoke("Bỏ qua LWPOLYLINE không nằm trên mặt phẳng song song WCS XY.");
                         return null;
                     }
 
@@ -219,6 +219,10 @@ namespace ProWallTools
                     for (int i = 0; i < worldVertices.Length; i++)
                     {
                         polyline.SetPointAt(i, ToPoint2d(worldVertices[i]));
+                        if (reverseBulges)
+                        {
+                            polyline.SetBulgeAt(i, -sourcePolyline.GetBulgeAt(i));
+                        }
                     }
                 }
                 else if (curve is Line sourceLine)
@@ -257,10 +261,16 @@ namespace ProWallTools
             }
         }
 
-        private static bool IsPositiveWorldZ(Vector3d normal)
+        private static bool TryGetWorldZDirection(Vector3d normal, out bool reverseBulges)
         {
-            return normal.Length > 1e-9 &&
-                   normal.GetNormal().DotProduct(Vector3d.ZAxis) >= 1.0 - 1e-9;
+            reverseBulges = false;
+            if (normal.Length <= 1e-9) return false;
+
+            double dot = normal.GetNormal().DotProduct(Vector3d.ZAxis);
+            if (Math.Abs(Math.Abs(dot) - 1.0) > 1e-9) return false;
+
+            reverseBulges = dot < 0;
+            return true;
         }
 
         public static List<List<Curve>> ClusterCurves(
@@ -278,7 +288,11 @@ namespace ProWallTools
             {
                 CurveBounds first = bounds[pair.Item1];
                 CurveBounds second = bounds[pair.Item2];
-                if (AreExtentsNear(first.Extents, second.Extents, gapTolerance))
+                if (!AreExtentsNear(first.Extents, second.Extents, gapTolerance)) continue;
+
+                Curve firstCurve = curves[first.Index];
+                Curve secondCurve = curves[second.Index];
+                if (AreCurvesNear(firstCurve, secondCurve, gapTolerance, logger))
                 {
                     unionFind.Union(first.Index, second.Index);
                 }
@@ -347,6 +361,101 @@ namespace ProWallTools
                    first.MaxPoint.Y + gap >= second.MinPoint.Y;
         }
 
+        private static bool AreCurvesNear(
+            Curve first,
+            Curve second,
+            double tolerance,
+            Action<string> logger)
+        {
+            if (first == null || second == null) return false;
+            double effectiveTolerance = Math.Max(tolerance, 1e-9);
+
+            try
+            {
+                var intersections = new Point3dCollection();
+                first.IntersectWith(
+                    second,
+                    Intersect.OnBothOperands,
+                    intersections,
+                    IntPtr.Zero,
+                    IntPtr.Zero);
+                if (intersections.Count > 0) return true;
+            }
+            catch (Exception ex)
+            {
+                logger?.Invoke("Không thể kiểm tra giao điểm curve khi gom cụm: " + ex.Message);
+            }
+
+            foreach (Point3d point in GetProbePoints(first))
+            {
+                if (IsPointNearCurve(point, second, effectiveTolerance, logger)) return true;
+            }
+
+            foreach (Point3d point in GetProbePoints(second))
+            {
+                if (IsPointNearCurve(point, first, effectiveTolerance, logger)) return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsPointNearCurve(
+            Point3d point,
+            Curve curve,
+            double tolerance,
+            Action<string> logger)
+        {
+            try
+            {
+                Point3d closest = curve.GetClosestPointTo(point, false);
+                return point.DistanceTo(closest) <= tolerance;
+            }
+            catch (Exception ex)
+            {
+                logger?.Invoke("Không thể đo khoảng cách giữa các curve: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static IEnumerable<Point3d> GetProbePoints(Curve curve)
+        {
+            if (curve == null) yield break;
+
+            if (curve is Polyline polyline)
+            {
+                for (int i = 0; i < polyline.NumberOfVertices; i++)
+                {
+                    yield return polyline.GetPoint3dAt(i);
+                }
+            }
+            else
+            {
+                yield return curve.StartPoint;
+                if (curve.EndPoint.DistanceTo(curve.StartPoint) > 1e-9)
+                {
+                    yield return curve.EndPoint;
+                }
+            }
+
+            double parameterRange = curve.EndParam - curve.StartParam;
+            if (Math.Abs(parameterRange) <= 1e-9) yield break;
+
+            double[] fractions = { 0.25, 0.5, 0.75 };
+            foreach (double fraction in fractions)
+            {
+                Point3d point;
+                try
+                {
+                    point = curve.GetPointAtParameter(curve.StartParam + parameterRange * fraction);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+                yield return point;
+            }
+        }
+
         public static BoundaryBuildResult ProcessClusterToBoundaries(
             List<Curve> cluster,
             double gapTolerance,
@@ -356,20 +465,96 @@ namespace ProWallTools
             if (cluster == null) throw new ArgumentNullException(nameof(cluster));
 
             var result = new BoundaryBuildResult();
-            List<Curve> bridges = CreateBridges(cluster, gapTolerance, vertexTolerance, logger);
             var workingCurves = new List<Curve>(cluster);
-            workingCurves.AddRange(bridges);
+            var bridges = new List<Curve>();
 
             try
             {
-                DBObjectCollection input = new DBObjectCollection();
-                DBObjectCollection regions = null;
-                var mergedRegions = new List<Region>();
-                var unmergedRegions = new List<Region>();
+                string originalRegionError;
+                TryBuildRegionBoundaries(
+                    workingCurves,
+                    vertexTolerance,
+                    logger,
+                    result.Boundaries,
+                    out originalRegionError);
 
-                try
+                if (result.Boundaries.Count == 0)
                 {
-                foreach (Curve curve in workingCurves) input.Add(curve);
+                    bridges = CreateBridges(cluster, gapTolerance, vertexTolerance, logger);
+                    if (bridges.Count > 0)
+                    {
+                        workingCurves.AddRange(bridges);
+                        string bridgedRegionError;
+                        TryBuildRegionBoundaries(
+                            workingCurves,
+                            vertexTolerance,
+                            logger,
+                            result.Boundaries,
+                            out bridgedRegionError);
+
+                        if (result.Boundaries.Count == 0 && !string.IsNullOrWhiteSpace(bridgedRegionError))
+                        {
+                            result.Warnings.Add("Không thể tạo Region sau khi nối khe: " + bridgedRegionError);
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(originalRegionError))
+                    {
+                        result.Warnings.Add("Không thể tạo Region: " + originalRegionError);
+                    }
+                }
+
+                if (result.Boundaries.Count == 0)
+                {
+                    result.UsedFallback = true;
+                    List<Polyline> fallback = JoinClosedCurves(
+                        workingCurves,
+                        gapTolerance,
+                        vertexTolerance,
+                        logger);
+                    result.Boundaries.AddRange(fallback);
+                    if (fallback.Count == 0)
+                    {
+                        result.Warnings.Add("Cụm curve không tạo được đường bao kín an toàn.");
+                    }
+                    else
+                    {
+                        result.Warnings.Add("Đã dùng phương án nối curve dự phòng do Region không tạo được kết quả.");
+                    }
+                }
+
+                return result;
+            }
+            catch (Exception)
+            {
+                result.DisposeBoundaries();
+                throw;
+            }
+            finally
+            {
+                foreach (Curve bridge in bridges)
+                {
+                    if (bridge != null && !bridge.IsDisposed) bridge.Dispose();
+                }
+            }
+        }
+
+        private static bool TryBuildRegionBoundaries(
+            IEnumerable<Curve> curves,
+            double vertexTolerance,
+            Action<string> logger,
+            ICollection<Polyline> boundaries,
+            out string error)
+        {
+            error = null;
+            DBObjectCollection input = new DBObjectCollection();
+            DBObjectCollection regions = null;
+            var mergedRegions = new List<Region>();
+            var unmergedRegions = new List<Region>();
+            int countBefore = boundaries.Count;
+
+            try
+            {
+                foreach (Curve curve in curves) input.Add(curve);
                 regions = Region.CreateFromCurves(input);
 
                 foreach (DBObject item in regions)
@@ -406,77 +591,44 @@ namespace ProWallTools
                             vertexTolerance,
                             vertexTolerance,
                             logger);
-                        result.Boundaries.AddRange(loops);
+                        foreach (Polyline loop in loops) boundaries.Add(loop);
                     }
                     catch (Exception ex)
                     {
-                        result.Warnings.Add("Không thể trích boundary từ Region: " + ex.Message);
-                        logger?.Invoke(ex.ToString());
+                        logger?.Invoke("Không thể trích boundary từ Region: " + ex);
                     }
                     finally
                     {
                         DisposeCollection(exploded, disposeItems: true);
                     }
                 }
-                }
-                catch (Exception ex)
-                {
-                    result.Warnings.Add("Không thể tạo Region: " + ex.Message);
-                    logger?.Invoke(ex.ToString());
-                }
-                finally
-                {
-                    if (regions != null)
-                    {
-                        // Region items are transferred to unmergedRegions/mergedRegions.
-                        regions.Dispose();
-                    }
 
-                    foreach (Region region in mergedRegions)
-                    {
-                        if (region != null && !region.IsDisposed) region.Dispose();
-                    }
-
-                    foreach (Region region in unmergedRegions)
-                    {
-                        if (region != null && !region.IsDisposed) region.Dispose();
-                    }
-
-                    input.Dispose();
-                }
-
-                if (result.Boundaries.Count == 0)
-                {
-                    result.UsedFallback = true;
-                    List<Polyline> fallback = JoinClosedCurves(
-                        workingCurves,
-                        gapTolerance,
-                        vertexTolerance,
-                        logger);
-                    result.Boundaries.AddRange(fallback);
-                    if (fallback.Count == 0)
-                    {
-                        result.Warnings.Add("Cụm curve không tạo được đường bao kín an toàn.");
-                    }
-                    else
-                    {
-                        result.Warnings.Add("Đã dùng phương án nối curve dự phòng do Region không tạo được kết quả.");
-                    }
-                }
-
-                return result;
+                return boundaries.Count > countBefore;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                result.DisposeBoundaries();
-                throw;
+                error = ex.Message;
+                logger?.Invoke(ex.ToString());
+                return false;
             }
             finally
             {
-                foreach (Curve bridge in bridges)
+                if (regions != null)
                 {
-                    if (bridge != null && !bridge.IsDisposed) bridge.Dispose();
+                    regions.Dispose();
                 }
+
+                foreach (Region region in mergedRegions)
+                {
+                    if (region != null && !region.IsDisposed) region.Dispose();
+                }
+
+                foreach (Region region in unmergedRegions)
+                {
+                    if (region != null && !region.IsDisposed) region.Dispose();
+                }
+
+                input.Dispose();
             }
         }
 
