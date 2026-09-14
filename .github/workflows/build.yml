@@ -1,0 +1,31 @@
+name: Build and geometry tests
+
+on:
+  push:
+    branches:
+      - codex/refactor
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build F# geometry kernel
+        run: dotnet build "Wall Joiner Geometry/Wall Joiner Geometry.fsproj" -c Release
+
+      - name: Run pure geometry checks
+        run: dotnet run --project "Wall Joiner Super.Tests/Wall Joiner Super.Tests.csproj" -c Release -p:Platform=x64
+
+      - name: Build AutoCAD plugin and bundle
+        run: dotnet build "Wall Joiner Super/Wall Joiner Super.csproj" -c Release -p:Platform=x64
