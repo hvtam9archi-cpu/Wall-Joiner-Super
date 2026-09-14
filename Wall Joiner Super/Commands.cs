@@ -66,8 +66,8 @@ namespace ProWallTools
             {
                 WallSelectionResult selection = WallInteraction.GetSelection(
                     document.Editor,
-                    "\nChọn LINE, POLYLINE hoặc block đường bao tường: ",
-                    "LINE,LWPOLYLINE,POLYLINE,INSERT");
+                    "\nChọn LINE, ARC, CIRCLE, POLYLINE hoặc block đường bao tường: ",
+                    "LINE,ARC,CIRCLE,LWPOLYLINE,POLYLINE,INSERT");
                 if (!CanContinue(selection, document)) return;
 
                 if (isFinishing)
