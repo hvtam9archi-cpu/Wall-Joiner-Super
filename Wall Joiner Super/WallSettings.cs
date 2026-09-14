@@ -14,6 +14,8 @@ namespace ProWallTools
     [DataContract]
     public sealed class WallSettings
     {
+        private bool _keepOriginals;
+
         [DataMember(Order = 1)]
         public double GapTolerance { get; set; } = 10.0;
 
@@ -36,7 +38,11 @@ namespace ProWallTools
         public string FinishLayer { get; set; } = "ABC_A_Netmanh";
 
         [DataMember(Order = 8)]
-        public bool KeepOriginals { get; set; } = false;
+        public bool KeepOriginals
+        {
+            get => _keepOriginals || !StrictMode;
+            set => _keepOriginals = value;
+        }
 
         [DataMember(Order = 9)]
         public bool StrictMode { get; set; } = true;
