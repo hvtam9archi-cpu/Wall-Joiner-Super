@@ -23,7 +23,7 @@ namespace ProWallTools
             if (settings == null) throw new ArgumentNullException(nameof(settings));
 
             // WJ now always replaces source geometry with the joined result.
-            chkKeepOriginals.Visibility = Visibility.Collapsed;
+            chkKeepOriginals.Visibility = System.Windows.Visibility.Collapsed;
 
             cmbWallLayer.ItemsSource = layerNames;
             cmbFinishLayer.ItemsSource = layerNames;
