@@ -14,8 +14,6 @@ namespace ProWallTools
     [DataContract]
     public sealed class WallSettings
     {
-        private bool _keepOriginals;
-
         [DataMember(Order = 1)]
         public double GapTolerance { get; set; } = 10.0;
 
@@ -37,11 +35,12 @@ namespace ProWallTools
         [DataMember(Order = 7)]
         public string FinishLayer { get; set; } = "ABC_A_Netmanh";
 
+        // Retained only for backward-compatible settings JSON. WJ always replaces source geometry.
         [DataMember(Order = 8)]
         public bool KeepOriginals
         {
-            get => _keepOriginals || !StrictMode;
-            set => _keepOriginals = value;
+            get => false;
+            set { }
         }
 
         [DataMember(Order = 9)]
