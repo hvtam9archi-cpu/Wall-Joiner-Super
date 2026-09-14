@@ -26,6 +26,38 @@ namespace ProWallTools
                     return result;
                 }
 
+                // Preserve the user's original geometry whenever the source already forms
+                // one exact closed loop. LINE/ARC/LWPOLYLINE/CIRCLE stay exact here and do
+                // not pass through Region.Explode, which can split simple edges heavily.
+                if (TryUseSingleExactLoop(
+                    workingCurves,
+                    vertexTolerance,
+                    logger,
+                    result.Boundaries))
+                {
+                    return result;
+                }
+
+                bridges = GeometryKernelAdapter.CreateSafeBridges(
+                    workingCurves,
+                    gapTolerance,
+                    vertexTolerance,
+                    logger);
+                if (bridges.Count > 0)
+                {
+                    workingCurves.AddRange(bridges);
+                    if (TryUseSingleExactLoop(
+                        workingCurves,
+                        vertexTolerance,
+                        logger,
+                        result.Boundaries))
+                    {
+                        return result;
+                    }
+                }
+
+                // Region is now a fallback for actual overlap/boolean cases rather than
+                // the default path for every simple wall loop.
                 string regionError;
                 TryBuildRegionBoundaries(
                     workingCurves,
@@ -33,34 +65,6 @@ namespace ProWallTools
                     logger,
                     result.Boundaries,
                     out regionError);
-
-                if (result.Boundaries.Count == 0)
-                {
-                    bridges = GeometryKernelAdapter.CreateSafeBridges(
-                        workingCurves,
-                        gapTolerance,
-                        vertexTolerance,
-                        logger);
-                    if (bridges.Count > 0)
-                    {
-                        workingCurves.AddRange(bridges);
-                        string bridgedRegionError;
-                        TryBuildRegionBoundaries(
-                            workingCurves,
-                            vertexTolerance,
-                            logger,
-                            result.Boundaries,
-                            out bridgedRegionError);
-                        if (result.Boundaries.Count == 0 && !string.IsNullOrWhiteSpace(bridgedRegionError))
-                        {
-                            result.Warnings.Add("Region sau safe bridge thất bại: " + bridgedRegionError);
-                        }
-                    }
-                    else if (!string.IsNullOrWhiteSpace(regionError))
-                    {
-                        result.Warnings.Add("Region ban đầu thất bại: " + regionError);
-                    }
-                }
 
                 if (result.Boundaries.Count == 0)
                 {
@@ -73,13 +77,12 @@ namespace ProWallTools
 
                     if (topologyLoops.Count == 0)
                     {
+                        if (!string.IsNullOrWhiteSpace(regionError))
+                        {
+                            result.Warnings.Add("Region fallback thất bại: " + regionError);
+                        }
                         result.Warnings.Add(
-                            "F# topology không tìm được loop kín; cụm được bỏ qua thay vì tự đóng cạnh dài hoặc nối mơ hồ.");
-                    }
-                    else
-                    {
-                        result.Warnings.Add(
-                            "Đã dựng boundary bằng F# topology fallback sau khi Region không tạo được kết quả.");
+                            "Topology không tìm được loop kín; cụm được bỏ qua thay vì tự đóng cạnh dài hoặc nối mơ hồ.");
                     }
                 }
 
@@ -100,6 +103,34 @@ namespace ProWallTools
                     }
                 }
             }
+        }
+
+        private static bool TryUseSingleExactLoop(
+            IReadOnlyList<Curve> curves,
+            double vertexTolerance,
+            Action<string> logger,
+            ICollection<Polyline> boundaries)
+        {
+            if (!GeometryKernelAdapter.TryStitchExactLoops(
+                curves,
+                vertexTolerance,
+                logger,
+                out List<Polyline> exactLoops))
+            {
+                return false;
+            }
+
+            if (exactLoops.Count != 1)
+            {
+                foreach (Polyline loop in exactLoops)
+                {
+                    if (loop != null && !loop.IsDisposed) loop.Dispose();
+                }
+                return false;
+            }
+
+            boundaries.Add(exactLoops[0]);
+            return true;
         }
 
         private static List<Curve> CloneAndCleanCurves(
