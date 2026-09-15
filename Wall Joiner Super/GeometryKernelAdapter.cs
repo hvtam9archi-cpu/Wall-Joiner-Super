@@ -63,6 +63,86 @@ namespace ProWallTools
             return result;
         }
 
+        public static Polyline CreateCleanedPolylineClone(
+            Polyline source,
+            IReadOnlyList<Point2d> vertexPositions,
+            double tolerance,
+            out int removedVertexCount)
+        {
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            if (vertexPositions == null) throw new ArgumentNullException(nameof(vertexPositions));
+            if (vertexPositions.Count != source.NumberOfVertices)
+            {
+                throw new ArgumentException(
+                    "Vertex positions must match the source polyline vertex count.",
+                    nameof(vertexPositions));
+            }
+
+            var vertices = new VertexDto[source.NumberOfVertices];
+            for (int i = 0; i < source.NumberOfVertices; i++)
+            {
+                Point2d point = vertexPositions[i];
+                vertices[i] = new VertexDto
+                {
+                    X = point.X,
+                    Y = point.Y,
+                    Bulge = source.GetBulgeAt(i),
+                    StartWidth = source.GetStartWidthAt(i),
+                    EndWidth = source.GetEndWidthAt(i)
+                };
+            }
+
+            VertexDto[] cleaned = GeometryKernel.CleanVertices(vertices, source.Closed, tolerance);
+            removedVertexCount = vertices.Length - cleaned.Length;
+            if (cleaned.Length < 2)
+            {
+                return null;
+            }
+
+            var result = source.Clone() as Polyline;
+            if (result == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                bool wasClosed = result.Closed;
+                result.Closed = false;
+                for (int i = result.NumberOfVertices - 1; i >= 1; i--)
+                {
+                    result.RemoveVertexAt(i);
+                }
+
+                SetPolylineVertex(result, 0, cleaned[0]);
+                for (int i = 1; i < cleaned.Length; i++)
+                {
+                    VertexDto vertex = cleaned[i];
+                    result.AddVertexAt(
+                        i,
+                        new Point2d(vertex.X, vertex.Y),
+                        vertex.Bulge,
+                        vertex.StartWidth,
+                        vertex.EndWidth);
+                }
+                result.Closed = wasClosed;
+                return result;
+            }
+            catch
+            {
+                result.Dispose();
+                throw;
+            }
+        }
+
+        private static void SetPolylineVertex(Polyline polyline, int index, VertexDto vertex)
+        {
+            polyline.SetPointAt(index, new Point2d(vertex.X, vertex.Y));
+            polyline.SetBulgeAt(index, vertex.Bulge);
+            polyline.SetStartWidthAt(index, vertex.StartWidth);
+            polyline.SetEndWidthAt(index, vertex.EndWidth);
+        }
+
         public static bool TryStitchExactLoops(
             IReadOnlyList<Curve> curves,
             double vertexTolerance,

@@ -132,12 +132,19 @@ namespace ProWallTools
                             targetAnchor,
                             settings.SnapStep,
                             settings.VertexTolerance,
-                            out string rejectionReason);
+                            out string rejectionReason,
+                            out int removedVertexCount);
                         if (replacement == null)
                         {
                             result.SkippedCount++;
                             result.AddWarning($"Bỏ qua {source.SourceId.Handle}: {rejectionReason}");
                             continue;
+                        }
+
+                        if (removedVertexCount > 0)
+                        {
+                            result.AddWarning(
+                                $"Clean Poly đã loại {removedVertexCount} đỉnh trùng khỏi {source.SourceId.Handle}.");
                         }
 
                         replacements.Add(new Replacement

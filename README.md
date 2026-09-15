@@ -13,7 +13,9 @@ plugin snapshot dữ liệu, tính kết quả trong bộ nhớ rồi ghi theo m
 - `WJ`: gom các curve gần nhau, làm sạch vertex, tạo boundary kín và đưa về Wall Layer.
 - `FW`: dùng cùng pipeline boundary rồi tạo offset trong, ngoài hoặc cả hai phía.
 - `BW`: làm tròn LINE/LWPOLYLINE theo bước lưới; ưu tiên snap theo consensus của các
-  vertex thật gần geometry xung quanh thay vì snap theo góc bounding box.
+  vertex thật gần geometry xung quanh thay vì snap theo góc bounding box. Sau khi snap,
+  Clean Poly loại các đỉnh liên tiếp bị trùng trong `Vertex Tolerance` và giữ bulge/width
+  của cạnh hợp lệ kế tiếp.
 - `WJ_UI`: mở bảng cấu hình.
 
 ## Geometry pipeline

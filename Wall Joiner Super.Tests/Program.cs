@@ -84,6 +84,21 @@ namespace ProWallTools.Tests
 
             VertexDto[] cleanedTwice = GeometryKernel.CleanVertices(cleaned, true, 1e-9);
             Verify("Clean poly is idempotent", SameVertices(cleaned, cleanedTwice));
+
+            var snappedDuplicates = new[]
+            {
+                Vertex(0, 0, 0, 1, 2),
+                Vertex(0.05, 0, 0.4, 3, 4),
+                Vertex(10, 0, 0, 5, 6)
+            };
+            VertexDto[] cleanedAfterSnap = GeometryKernel.CleanVertices(snappedDuplicates, false, 0.1);
+            Verify("BW clean uses configured vertex tolerance", cleanedAfterSnap.Length == 2);
+            Verify(
+                "BW clean preserves outgoing data from the retained vertex",
+                cleanedAfterSnap.Length > 0 &&
+                Nearly(cleanedAfterSnap[0].Bulge, 0.4) &&
+                Nearly(cleanedAfterSnap[0].StartWidth, 3) &&
+                Nearly(cleanedAfterSnap[0].EndWidth, 4));
         }
 
         private static void VerifyClosedLoopStitching()

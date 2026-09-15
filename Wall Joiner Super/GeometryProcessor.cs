@@ -1004,7 +1004,27 @@ namespace ProWallTools
             double vertexTolerance,
             out string rejectionReason)
         {
+            return CreateBeautifiedClone(
+                entity,
+                originalAnchor,
+                targetAnchor,
+                snapStep,
+                vertexTolerance,
+                out rejectionReason,
+                out _);
+        }
+
+        public static Entity CreateBeautifiedClone(
+            Entity entity,
+            Point2d originalAnchor,
+            Point2d targetAnchor,
+            double snapStep,
+            double vertexTolerance,
+            out string rejectionReason,
+            out int removedVertexCount)
+        {
             rejectionReason = null;
+            removedVertexCount = 0;
 
             if (entity is Line sourceLine)
             {
@@ -1025,33 +1045,24 @@ namespace ProWallTools
 
             if (entity is Polyline sourcePolyline)
             {
-                var polyline = sourcePolyline.Clone() as Polyline;
+                var snappedVertices = new Point2d[sourcePolyline.NumberOfVertices];
                 for (int i = 0; i < sourcePolyline.NumberOfVertices; i++)
                 {
-                    Point2d snapped = SnapPoint(
+                    snappedVertices[i] = SnapPoint(
                         sourcePolyline.GetPoint2dAt(i),
                         originalAnchor,
                         targetAnchor,
                         snapStep);
-                    polyline.SetPointAt(i, snapped);
                 }
 
-                for (int i = 1; i < polyline.NumberOfVertices; i++)
+                Polyline polyline = GeometryKernelAdapter.CreateCleanedPolylineClone(
+                    sourcePolyline,
+                    snappedVertices,
+                    vertexTolerance,
+                    out removedVertexCount);
+                if (polyline == null)
                 {
-                    if (polyline.GetPoint2dAt(i - 1).GetDistanceTo(polyline.GetPoint2dAt(i)) <= vertexTolerance)
-                    {
-                        polyline.Dispose();
-                        rejectionReason = "Hai đỉnh liên tiếp bị trùng sau khi làm đẹp.";
-                        return null;
-                    }
-                }
-
-                if (polyline.Closed &&
-                    polyline.NumberOfVertices > 2 &&
-                    polyline.GetPoint2dAt(0).GetDistanceTo(polyline.GetPoint2dAt(polyline.NumberOfVertices - 1)) <= vertexTolerance)
-                {
-                    polyline.Dispose();
-                    rejectionReason = "Cạnh đóng bị co về chiều dài bằng 0 sau khi làm đẹp.";
+                    rejectionReason = "Polyline không còn đủ đỉnh sau khi Snap và Clean Poly.";
                     return null;
                 }
 

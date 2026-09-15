@@ -185,8 +185,17 @@ namespace ProWallTools
             button.Size = RibbonItemSize.Large;
             button.Orientation = Orientation.Vertical;
             button.CommandHandler = new RibbonCommandHandler(commandName);
-            button.LargeImage = icon;
-            button.Image = icon;
+            button.LargeImage = SizeRibbonIcon(icon, 32);
+            button.Image = SizeRibbonIcon(icon, 16);
+        }
+
+        private static ImageSource SizeRibbonIcon(ImageSource image, double size)
+        {
+            // Explicit WPF bounds prevent PNG DPI metadata from enlarging the ribbon icon.
+            var drawing = new ImageDrawing(image, new System.Windows.Rect(0, 0, size, size));
+            var sizedImage = new DrawingImage(drawing);
+            sizedImage.Freeze();
+            return sizedImage;
         }
 
         private static ImageSource LoadRibbonIcon(string resourceName)
